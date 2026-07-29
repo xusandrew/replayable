@@ -110,3 +110,72 @@ def test_parse_env_file_rejects_invalid_names(tmp_path):
 
     with pytest.raises(EnvFileError, match="line 1"):
         parse_env_file(path)
+
+
+# ---------------------------------------------------------------------------
+# Secret-override config validation.
+#
+# A malformed [secrets] table must fail loudly. Silently ignoring it would
+# mean a variable the user believed was declared secret gets recorded in
+# plaintext, which is the one failure this module exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_override_file_yields_no_extra_names(tmp_path):
+    assert load_secret_name_overrides(None) == ()
+    assert load_secret_name_overrides(tmp_path / "absent.toml") == ()
+
+
+def test_override_file_without_secrets_table_yields_no_extra_names(tmp_path):
+    path = tmp_path / "replayable.toml"
+    path.write_text('[normalization]\nfield_names = ["x"]\n', encoding="utf-8")
+
+    assert load_secret_name_overrides(path) == ()
+
+
+def test_override_names_are_deduplicated_in_order(tmp_path):
+    path = tmp_path / "replayable.toml"
+    path.write_text(
+        '[secrets]\nnames = ["ALPHA", "BETA", "ALPHA"]\n',
+        encoding="utf-8",
+    )
+
+    assert load_secret_name_overrides(path) == ("ALPHA", "BETA")
+
+
+def test_malformed_override_toml_is_rejected(tmp_path):
+    path = tmp_path / "replayable.toml"
+    path.write_text("[secrets\nnames = ", encoding="utf-8")
+
+    with pytest.raises(SecretConfigError, match="cannot load secret overrides"):
+        load_secret_name_overrides(path)
+
+
+def test_secrets_table_must_be_a_table(tmp_path):
+    path = tmp_path / "replayable.toml"
+    path.write_text('secrets = "not-a-table"\n', encoding="utf-8")
+
+    with pytest.raises(SecretConfigError, match=r"\[secrets\] must be a table"):
+        load_secret_name_overrides(path)
+
+
+@pytest.mark.parametrize(
+    "names",
+    ['names = "ANTHROPIC_API_KEY"', "names = [1, 2]", "names = [\"OK\", 3]"],
+)
+def test_secret_names_must_be_an_array_of_strings(tmp_path, names):
+    path = tmp_path / "replayable.toml"
+    path.write_text(f"[secrets]\n{names}\n", encoding="utf-8")
+
+    with pytest.raises(SecretConfigError, match="must be an array of strings"):
+        load_secret_name_overrides(path)
+
+
+def test_unreadable_env_file_reports_the_path(tmp_path):
+    """A directory where an env file was expected names the path, not errno."""
+
+    path = tmp_path / "env-dir"
+    path.mkdir()
+
+    with pytest.raises(EnvFileError, match="cannot read environment file"):
+        parse_env_file(path, host_environment={})
