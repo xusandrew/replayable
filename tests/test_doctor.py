@@ -42,6 +42,10 @@ def completed(stdout="", stderr="", returncode=0):
     return run
 
 
+def docker_on_path(_name):
+    return "/usr/bin/docker"
+
+
 def write_ca(path, *, not_before, lifetime=timedelta(days=365)):
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test-ca")])
@@ -83,9 +87,20 @@ def test_present_mitmdump_passes_and_reports_its_path():
 # --------------------------------------------------------------------------
 
 
+def test_missing_docker_cli_fails_without_calling_the_runner():
+    def must_not_run(_command):
+        raise AssertionError("runner must not be called without a Docker CLI")
+
+    result = check_docker(run=must_not_run, which=lambda _name: None)
+
+    assert result.status is Status.FAIL
+    assert "not found on PATH" in result.detail
+
+
 def test_unreachable_docker_daemon_fails():
     result = check_docker(
-        run=completed(stderr="Cannot connect to the Docker daemon", returncode=1)
+        run=completed(stderr="Cannot connect to the Docker daemon", returncode=1),
+        which=docker_on_path,
     )
 
     assert result.status is Status.FAIL
@@ -96,7 +111,7 @@ def test_unreachable_docker_daemon_fails():
 def test_docker_older_than_host_gateway_support_fails():
     """20.10 introduced host-gateway, which the whole proxy contract needs."""
 
-    result = check_docker(run=completed(stdout="19.03.12\n"))
+    result = check_docker(run=completed(stdout="19.03.12\n"), which=docker_on_path)
 
     assert result.status is Status.FAIL
     assert "predates host-gateway" in result.detail
@@ -105,7 +120,7 @@ def test_docker_older_than_host_gateway_support_fails():
 
 @pytest.mark.parametrize("version", ["20.10.0", "24.0.7", "28.4.0"])
 def test_supported_docker_versions_pass(version):
-    result = check_docker(run=completed(stdout=f"{version}\n"))
+    result = check_docker(run=completed(stdout=f"{version}\n"), which=docker_on_path)
 
     assert result.status is Status.PASS
 
@@ -113,9 +128,19 @@ def test_supported_docker_versions_pass(version):
 def test_unparseable_docker_version_warns_rather_than_blocking():
     """An unrecognized version string is not proof of a broken environment."""
 
-    result = check_docker(run=completed(stdout="wibble\n"))
+    result = check_docker(run=completed(stdout="wibble\n"), which=docker_on_path)
 
     assert result.status is Status.WARN
+
+
+def test_docker_cli_execution_error_is_reported_without_a_traceback():
+    def fail_to_start(_command):
+        raise OSError("executable vanished")
+
+    result = check_docker(run=fail_to_start, which=docker_on_path)
+
+    assert result.status is Status.FAIL
+    assert "executable vanished" in result.detail
 
 
 # --------------------------------------------------------------------------
@@ -169,12 +194,7 @@ def test_valid_ca_passes(tmp_path):
     assert result.status is Status.PASS
 
 
-def test_expired_ca_fails_and_warns_that_cassettes_are_dead(tmp_path):
-    """Re-recording is the only fix, and the message has to say so.
-
-    A user who regenerates the CA and expects old cassettes to keep replaying
-    will hit an unexplained TLS failure instead.
-    """
+def test_expired_ca_fails_and_explains_how_to_keep_old_cassettes_replayable(tmp_path):
 
     path = write_ca(
         tmp_path / "ca.pem",
@@ -186,7 +206,9 @@ def test_expired_ca_fails_and_warns_that_cassettes_are_dead(tmp_path):
 
     assert result.status is Status.FAIL
     assert "expired" in result.detail
-    assert "re-recorded" in result.fix
+    assert "older cassette" in result.fix
+    assert "make_replay_ca.py" in result.fix
+    assert "must be re-recorded" not in result.fix
 
 
 def test_ca_from_the_future_points_at_the_host_clock(tmp_path):
@@ -263,10 +285,10 @@ def test_free_proxy_port_passes():
     assert result.status is Status.PASS
 
 
-def test_busy_proxy_port_warns_and_suggests_an_ephemeral_port():
+def test_busy_proxy_port_fails_and_suggests_an_ephemeral_port():
     result = check_proxy_port(8080, is_free=lambda _port: False)
 
-    assert result.status is Status.WARN
+    assert result.status is Status.FAIL
     assert "--port 0" in result.fix
 
 

@@ -52,13 +52,10 @@ jobs:
         run: uv sync --locked
 
       - name: Generate a replay CA
-        # mitmproxy backdates a generated CA by only two days, and replay pins
-        # the container clock to the cassette's recorded t0. A stock CA would
-        # therefore stop being able to replay the golden cassette 48 hours
-        # after it was recorded — CI would start failing on a fixed date with a
-        # confusing TLS error. Generate one valid from well before any
-        # cassette in the corpus instead. The key is created fresh per run and
-        # never committed.
+        # mitmproxy backdates its CA and generated leaf certificates by only
+        # two days, while replay pins the container clock to cassette t0.
+        # Generate a CA valid across the corpus; the replay addon handles the
+        # separate leaf validity window. The key is fresh and never committed.
         run: uv run python scripts/make_replay_ca.py --not-before-days 3650 --force
 
       - name: Diagnose the runner

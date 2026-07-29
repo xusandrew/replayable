@@ -85,10 +85,13 @@ def _parse_docker_version(text: str) -> tuple[int, ...] | None:
         return None
 
 
-def check_docker(run: Runner = _run) -> CheckResult:
+def check_docker(
+    run: Runner = _run,
+    which: Callable[[str], str | None] = shutil.which,
+) -> CheckResult:
     """The daemon must be reachable and new enough for host-gateway."""
 
-    if shutil.which("docker") is None:
+    if which("docker") is None:
         return CheckResult(
             name="docker",
             status=Status.FAIL,
@@ -96,7 +99,15 @@ def check_docker(run: Runner = _run) -> CheckResult:
             fix="install Docker and make sure the `docker` CLI is on PATH",
         )
 
-    completed = run(["docker", "version", "--format", "{{.Server.Version}}"])
+    try:
+        completed = run(["docker", "version", "--format", "{{.Server.Version}}"])
+    except OSError as exc:
+        return CheckResult(
+            name="docker",
+            status=Status.FAIL,
+            detail=f"could not run the Docker CLI: {exc}",
+            fix="install Docker and make sure the `docker` CLI is usable",
+        )
     if completed.returncode != 0:
         return CheckResult(
             name="docker",
@@ -211,9 +222,9 @@ def check_ca(ca_path: Path, now: datetime | None = None) -> CheckResult:
             status=Status.FAIL,
             detail=f"expired on {not_after.isoformat()}",
             fix=(
-                "delete it and regenerate with `uv run mitmdump`; note that "
-                "cassettes recorded before the old CA expired can no longer be "
-                "replayed and must be re-recorded"
+                "regenerate it before recording; to replay an older cassette, "
+                "use a replacement CA whose validity begins before that "
+                "cassette's t0 (see scripts/make_replay_ca.py)"
             ),
         )
     return CheckResult(
@@ -293,7 +304,7 @@ def check_proxy_port(
         return CheckResult("proxy port", Status.PASS, f"{port} is free")
     return CheckResult(
         name="proxy port",
-        status=Status.WARN,
+        status=Status.FAIL,
         detail=f"{port} is already in use",
         fix=f"stop whatever holds port {port}, or pass `--port 0`",
     )

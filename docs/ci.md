@@ -15,6 +15,11 @@ It needs **no API key and no secrets.** That is the point being demonstrated: a
 recorded agent run reproduces offline, for $0.00, on a machine that has never
 seen the agent's credentials.
 
+`research-agent` is the byte-level determinism gate. The older `curl-demo`
+cassette predates workspace and stdout snapshots, so it is a network
+record/replay smoke test only; a green run does not claim byte-level output
+determinism for that fixture.
+
 From the CLI:
 
 ```bash
@@ -50,15 +55,16 @@ Replay pins the container's clock to the moment the cassette was recorded. If
 the CA mitmproxy signs with was created *after* that moment, the container sees
 a certificate that is not yet valid and every TLS handshake fails.
 
-mitmproxy backdates a generated CA by exactly **two days**. On a laptop that is
-invisible, because your CA is older than your cassettes. In CI it is a dated
-time bomb: a runner that generates a fresh CA can only replay cassettes recorded
-in the last 48 hours, so the golden replay would begin failing on a fixed
-calendar date, with a TLS error that says nothing about clocks.
+mitmproxy backdates a generated CA and each dynamically generated leaf
+certificate by exactly **two days**. On a laptop that is invisible, because
+your CA and workload clock are current. In CI it is a dated time bomb: a clean
+runner replaying an older pinned clock would eventually present certificates
+that are not yet valid, with a TLS error that says nothing about clocks.
 
-So CI generates its CA with `scripts/make_replay_ca.py`, backdated ten years. No
-private key is committed — the CA is created fresh per run and dies with the
-job.
+CI therefore generates its CA with `scripts/make_replay_ca.py`, backdated ten
+years, and the replay addon moves mitmproxy's leaf-certificate validity window
+to the cassette's `t0`. Backdating only the CA is insufficient. No private key
+is committed — the CA is created fresh per run and dies with the job.
 
 ```bash
 uv run python scripts/make_replay_ca.py --not-before-days 3650 --force
@@ -117,7 +123,7 @@ Each check exists because its failure mode is misleading in practice:
 | mitmdump | dependencies not installed | "mitmdump was not found" partway into a run |
 | docker | daemon down, or older than 20.10 | container start failure, or `host.docker.internal` not resolving |
 | mitmproxy CA | never generated, or expired | TLS handshake failures inside the container |
-| proxy port | a crashed run still holds 8080 | the proxy never becomes ready, then a timeout |
+| proxy port | a crashed run still holds 8080 | the runner rejects the port before starting the proxy |
 | clock skew | Docker VM clock drifted after host sleep | certificate-validity errors that look like a CA problem |
 | host-gateway | runner cannot route container → host | every agent request fails, looking like the agent's bug |
 

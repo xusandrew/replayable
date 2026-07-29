@@ -8,6 +8,7 @@ run is red or green.
 from __future__ import annotations
 
 import json
+import os
 import runpy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,6 +25,7 @@ _check = runpy.run_path(str(SCRIPTS / "check_replay.py"))
 
 build_ca = _make_ca["build_ca"]
 write_confdir = _make_ca["write_confdir"]
+write_ca_file_atomic = _make_ca["_write_atomic"]
 build_report = _check["build_report"]
 
 
@@ -81,6 +83,22 @@ def test_confdir_layout_matches_what_mitmproxy_expects(tmp_path):
     assert (tmp_path / "mitmproxy-ca.pem").stat().st_mode & 0o077 == 0
 
 
+def test_failed_ca_write_does_not_expose_a_partial_key(tmp_path, monkeypatch):
+    path = tmp_path / "mitmproxy-ca.pem"
+    path.write_bytes(b"old-complete-ca")
+
+    def fail_to_flush(_descriptor):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "fsync", fail_to_flush)
+
+    with pytest.raises(OSError, match="disk full"):
+        write_ca_file_atomic(path, b"new-partial-ca", 0o600)
+
+    assert path.read_bytes() == b"old-complete-ca"
+    assert not list(tmp_path.glob(".mitmproxy-ca.pem.*.tmp"))
+
+
 # --------------------------------------------------------------------------
 # check_replay
 # --------------------------------------------------------------------------
@@ -90,7 +108,12 @@ def write_cassette(root: Path, *, manifest: dict, replay: dict | None, **extra) 
     root.mkdir(parents=True, exist_ok=True)
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     if replay is not None:
+        replay.setdefault("exit_code", int(ExitCode.SUCCESS))
         (root / "last-replay.json").write_text(json.dumps(replay), encoding="utf-8")
+        (root / "replay-state.json").write_text(
+            json.dumps({"unconsumed_sequences": []}),
+            encoding="utf-8",
+        )
     for name, payload in extra.items():
         (root / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
     return root
@@ -189,6 +212,113 @@ def test_unserved_flows_are_reported(tmp_path):
     # report must not claim one — the reassuring half is the half people read.
     assert "DETERMINISTIC" not in rendered
     assert "not fully consumed" in rendered
+
+
+def test_legacy_cassette_without_hash_baselines_is_a_passing_smoke_replay(tmp_path):
+    """The workflow's curl-demo option predates workspace/stdout snapshots."""
+
+    cassette = write_cassette(
+        tmp_path / "c",
+        manifest={},
+        replay={
+            "workspace_sha256": "a" * 64,
+            "stdout_sha256": "b" * 64,
+        },
+    )
+
+    exit_code, lines = build_report(cassette)
+    rendered = "\n".join(lines)
+
+    assert exit_code == ExitCode.SUCCESS
+    assert "Replay passed" in rendered
+    assert "no complete byte-level" in rendered
+    assert "DETERMINISTIC" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("replay_exit_code", "expected_text"),
+    [
+        (ExitCode.AGENT_FAILED, "Agent failed"),
+        (ExitCode.REPLAY_MISMATCH, "Replay mismatch"),
+        (ExitCode.HARNESS_ERROR, "Harness error"),
+    ],
+)
+def test_nonzero_replay_result_cannot_be_reported_as_deterministic(
+    tmp_path,
+    replay_exit_code,
+    expected_text,
+):
+    cassette = write_cassette(
+        tmp_path / "c",
+        manifest={"workspace_sha256": "a" * 64, "stdout_sha256": "b" * 64},
+        replay={
+            "exit_code": int(replay_exit_code),
+            "workspace_sha256": "a" * 64,
+            "stdout_sha256": "b" * 64,
+        },
+    )
+
+    exit_code, lines = build_report(cassette)
+    rendered = "\n".join(lines)
+
+    assert exit_code == replay_exit_code
+    assert expected_text in rendered
+    assert "DETERMINISTIC" not in rendered
+
+
+@pytest.mark.parametrize(
+    "replay",
+    [
+        {},
+        {"exit_code": 0},
+        {"exit_code": 0, "workspace_sha256": "a" * 64},
+        {
+            "exit_code": "0",
+            "workspace_sha256": "a" * 64,
+            "stdout_sha256": "b" * 64,
+        },
+    ],
+)
+def test_incomplete_replay_metadata_is_a_harness_error(tmp_path, replay):
+    cassette = write_cassette(
+        tmp_path / "c",
+        manifest={"workspace_sha256": "a" * 64, "stdout_sha256": "b" * 64},
+        replay=replay,
+    )
+
+    exit_code, lines = build_report(cassette)
+
+    assert exit_code == ExitCode.HARNESS_ERROR
+    assert "Invalid" in "\n".join(lines)
+
+
+def test_missing_replay_state_is_a_harness_error(tmp_path):
+    cassette = write_cassette(
+        tmp_path / "c",
+        manifest={"workspace_sha256": "a" * 64, "stdout_sha256": "b" * 64},
+        replay={"workspace_sha256": "a" * 64, "stdout_sha256": "b" * 64},
+    )
+    (cassette / "replay-state.json").unlink()
+
+    exit_code, lines = build_report(cassette)
+
+    assert exit_code == ExitCode.HARNESS_ERROR
+    assert "replay is incomplete" in "\n".join(lines)
+
+
+@pytest.mark.parametrize("report", [{}, [], {"live_request": []}])
+def test_malformed_mismatch_report_is_a_harness_error(tmp_path, report):
+    cassette = write_cassette(
+        tmp_path / "c",
+        manifest={"workspace_sha256": "a" * 64, "stdout_sha256": "b" * 64},
+        replay={"workspace_sha256": "a" * 64, "stdout_sha256": "b" * 64},
+    )
+    (cassette / "replay-report.json").write_text(json.dumps(report), encoding="utf-8")
+
+    exit_code, lines = build_report(cassette)
+
+    assert exit_code == ExitCode.HARNESS_ERROR
+    assert "Invalid replay report" in "\n".join(lines)
 
 
 @pytest.mark.parametrize("missing", ["manifest", "replay"])

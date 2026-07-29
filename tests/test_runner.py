@@ -16,6 +16,7 @@ from replayable.runner import (
     FAKETIME_LIBRARY,
     HarnessError,
     _copy_stream,
+    _mitmproxy_confdir_for_ca,
     docker_command,
     proxy_process,
     record_run,
@@ -67,6 +68,19 @@ def test_docker_command_has_the_m1_proxy_and_ca_contract(tmp_path):
         "HTTP_PROXY=http://host.docker.internal:8765"
     )
     assert rendered.endswith("replayable/agent-base\nsh\n-c\necho ok")
+
+
+def test_custom_generated_ca_selects_its_signing_confdir(tmp_path):
+    certificate = tmp_path / "mitmproxy-ca-cert.pem"
+    combined = tmp_path / "mitmproxy-ca.pem"
+    certificate.write_text("certificate", encoding="utf-8")
+
+    assert _mitmproxy_confdir_for_ca(certificate) is None
+
+    combined.write_text("private key and certificate", encoding="utf-8")
+
+    assert _mitmproxy_confdir_for_ca(certificate) == tmp_path
+    assert _mitmproxy_confdir_for_ca(tmp_path / "renamed-ca.pem") is None
 
 
 def test_replay_time_environment_pins_wall_clock_but_not_monotonic():
@@ -175,9 +189,13 @@ def test_proxy_is_terminated_when_container_work_raises(monkeypatch, tmp_path):
             self.killed = True
 
     process = FakeProcess()
-    monkeypatch.setattr(
-        replayable.runner.subprocess, "Popen", lambda *_args, **_kwargs: process
-    )
+    observed_command = []
+
+    def fake_popen(command, **_kwargs):
+        observed_command.extend(command)
+        return process
+
+    monkeypatch.setattr(replayable.runner.subprocess, "Popen", fake_popen)
 
     with pytest.raises(RuntimeError, match="container failed"):
         with proxy_process(
@@ -185,11 +203,13 @@ def test_proxy_is_terminated_when_container_work_raises(monkeypatch, tmp_path):
             port=8080,
             addon_environment={},
             log_path=tmp_path / "proxy.log",
+            confdir=tmp_path / "mitm-conf",
         ):
             raise RuntimeError("container failed")
 
     assert process.terminated
     assert not process.killed
+    assert f"confdir={tmp_path / 'mitm-conf'}" in observed_command
 
 
 def test_proxy_readiness_timeout_still_terminates_process(monkeypatch, tmp_path):
@@ -374,6 +394,37 @@ def test_replay_rejects_ca_generated_after_recorded_clock(tmp_path):
     )
 
     with pytest.raises(HarnessError, match="generated after"):
+        replay_run(cassette=cassette, ca_path=ca_path)
+
+
+def test_replay_rejects_ca_expired_before_recorded_clock(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    not_before = datetime.now(UTC) - timedelta(days=365)
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "expired-test-ca")])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(not_before)
+        .not_valid_after(not_before + timedelta(days=30))
+        .sign(key, hashes.SHA256())
+    )
+    ca_path = tmp_path / "ca.pem"
+    ca_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+
+    cassette = tmp_path / "cassette"
+    CassetteWriter(cassette).initialize(stub_manifest(t0_epoch=datetime.now(UTC).timestamp()))
+
+    with pytest.raises(HarnessError, match="expired before"):
         replay_run(cassette=cassette, ca_path=ca_path)
 
 

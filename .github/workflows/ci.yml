@@ -51,8 +51,8 @@ jobs:
 
       - name: Generate a replay CA
         # Deliberately not mitmproxy's own generated CA: it backdates validity
-        # by only two days, which suffices for tests that record their own
-        # cassette but not for replaying any cassette older than that.
+        # by only two days. The replay addon separately pins generated leaf
+        # validity to cassette t0; both halves are needed for old cassettes.
         # See scripts/make_replay_ca.py for the full reasoning.
         run: uv run python scripts/make_replay_ca.py --not-before-days 3650 --force
 

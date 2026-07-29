@@ -11,12 +11,14 @@ detects this and refuses to run rather than emitting a confusing TLS error.
 mitmproxy backdates a generated CA by exactly two days. That is fine on a
 laptop whose CA predates its cassettes, but it makes CI a dated time bomb: a
 runner that generates a fresh CA can only replay cassettes recorded in the last
-48 hours. Every older recording — including the checked-in golden cassette —
-starts failing the moment it ages past that window.
+48 hours.
 
 So CI generates its CA here instead, with ``--not-before-days`` far enough back
-to cover any cassette in the corpus. No private key is committed to the
-repository: the CA is created fresh on each run and lives only for that job.
+to cover any cassette in the corpus. This handles the signing CA; the replay
+addon separately moves mitmproxy's dynamically generated leaf-certificate
+validity window to the cassette's ``t0``. Both are required. No private key is
+committed to the repository: the CA is created fresh on each run and lives only
+for that job.
 
 Usage
 -----
@@ -31,6 +33,8 @@ Writes the files mitmproxy expects in a confdir:
 from __future__ import annotations
 
 import argparse
+import os
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -94,13 +98,33 @@ def build_ca(not_before: datetime, lifetime_days: int) -> tuple[bytes, bytes]:
     return key_pem, cert_pem
 
 
+def _write_atomic(path: Path, content: bytes, mode: int) -> None:
+    """Replace one CA file atomically without exposing partial key material."""
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            temporary_path.chmod(mode)
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary_path.replace(path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def write_confdir(confdir: Path, key_pem: bytes, cert_pem: bytes) -> None:
     confdir.mkdir(parents=True, exist_ok=True)
     # mitmproxy signs with the combined key+cert file.
-    (confdir / "mitmproxy-ca.pem").write_bytes(key_pem + cert_pem)
-    (confdir / "mitmproxy-ca.pem").chmod(0o600)
+    _write_atomic(confdir / "mitmproxy-ca.pem", key_pem + cert_pem, 0o600)
     # Containers trust the certificate alone.
-    (confdir / "mitmproxy-ca-cert.pem").write_bytes(cert_pem)
+    _write_atomic(confdir / "mitmproxy-ca-cert.pem", cert_pem, 0o644)
 
 
 def main() -> None:
