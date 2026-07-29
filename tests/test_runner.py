@@ -7,22 +7,24 @@ import pytest
 from conftest import NullContext, stub_manifest
 
 import replayable.core.proxy
-import replayable.runner
 from replayable.cassette import CassetteWriter
+from replayable.core.ca import _mitmproxy_confdir_for_ca
+from replayable.core.container import _copy_stream
+from replayable.core.docker import (
+    CONTAINER_CA_PATH,
+    FAKETIME_LIBRARY,
+    docker_command,
+    replay_time_environment,
+)
+from replayable.core.proxy import proxy_process
 from replayable.exit_codes import ExitCode
 from replayable.inspection import explain_match, inspect_cassette
 from replayable.normalize_rules import load_rules
 from replayable.runner import (
-    CONTAINER_CA_PATH,
-    FAKETIME_LIBRARY,
     HarnessError,
-    _copy_stream,
-    _mitmproxy_confdir_for_ca,
-    docker_command,
-    proxy_process,
+    RunContext,
     record_run,
     replay_run,
-    replay_time_environment,
 )
 from replayable.snapshot import create_snapshot
 
@@ -116,7 +118,7 @@ def test_captured_stream_redacts_secret_across_read_boundaries():
 
 
 def test_replay_restores_nonsecret_env_and_dummies_secret_env(
-    monkeypatch, tmp_path, ca_file, proxy_stub
+    tmp_path, ca_file, proxy_stub
 ):
     cassette = tmp_path / "cassette"
     CassetteWriter(cassette).initialize(
@@ -137,19 +139,18 @@ def test_replay_restores_nonsecret_env_and_dummies_secret_env(
         observed.extend(command)
         return 0
 
-    monkeypatch.setattr(
-        replayable.runner,
-        "proxy_process",
-        proxy_stub(REPLAYABLE_STATE_FILE='{"unconsumed_sequences":[]}\n'),
-    )
-    monkeypatch.setattr(replayable.runner, "_run_container", fake_run)
-    monkeypatch.setattr(
-        replayable.runner,
-        "_select_replay_image",
-        lambda **_kwargs: "sha256:image",
+    context = RunContext(
+        proxy_process=proxy_stub(
+            REPLAYABLE_STATE_FILE='{"unconsumed_sequences":[]}\n'
+        ),
+        run_container=fake_run,
+        select_replay_image=lambda **_kwargs: "sha256:image",
     )
 
-    assert replay_run(cassette=cassette, ca_path=ca_file) == ExitCode.SUCCESS
+    assert (
+        replay_run(cassette=cassette, ca_path=ca_file, context=context)
+        == ExitCode.SUCCESS
+    )
     assert "ANTHROPIC_API_KEY=[REDACTED:ANTHROPIC_API_KEY]" in observed
     assert "MODEL=claude-haiku-4-5" in observed
     assert "PYTHONHASHSEED=0" in observed
@@ -261,7 +262,7 @@ def test_proxy_readiness_timeout_still_terminates_process(monkeypatch, tmp_path)
 
 
 def test_replay_mismatch_marker_overrides_container_exit(
-    monkeypatch, tmp_path, ca_file, proxy_stub
+    tmp_path, ca_file, proxy_stub
 ):
     cassette = tmp_path / "cassette"
     CassetteWriter(cassette).initialize(stub_manifest())
@@ -273,23 +274,13 @@ def test_replay_mismatch_marker_overrides_container_exit(
             "diff": "",
         }
     )
-    monkeypatch.setattr(
-        replayable.runner,
-        "proxy_process",
-        proxy_stub(REPLAYABLE_REPORT_FILE=mismatch_report + "\n"),
-    )
-    monkeypatch.setattr(
-        replayable.runner,
-        "_select_replay_image",
-        lambda **_kwargs: "sha256:image",
-    )
-    monkeypatch.setattr(
-        replayable.runner,
-        "_run_container",
-        lambda _command, **_kwargs: 22,
+    context = RunContext(
+        proxy_process=proxy_stub(REPLAYABLE_REPORT_FILE=mismatch_report + "\n"),
+        select_replay_image=lambda **_kwargs: "sha256:image",
+        run_container=lambda _command, **_kwargs: 22,
     )
 
-    result = replay_run(cassette=cassette, ca_path=ca_file)
+    result = replay_run(cassette=cassette, ca_path=ca_file, context=context)
     assert result == ExitCode.REPLAY_MISMATCH
 
 
@@ -336,7 +327,6 @@ def test_inspect_renders_flow_table_and_expanded_selected_body(tmp_path):
     [(False, ExitCode.SUCCESS), (True, ExitCode.REPLAY_MISMATCH)],
 )
 def test_replay_reports_unconsumed_flows(
-    monkeypatch,
     tmp_path,
     capsys,
     ca_file,
@@ -347,23 +337,23 @@ def test_replay_reports_unconsumed_flows(
     cassette = tmp_path / "cassette"
     CassetteWriter(cassette).initialize(stub_manifest())
 
-    monkeypatch.setattr(
-        replayable.runner,
-        "proxy_process",
-        proxy_stub(REPLAYABLE_STATE_FILE='{"unconsumed_sequences":[2,3]}\n'),
-    )
-    monkeypatch.setattr(
-        replayable.runner,
-        "_select_replay_image",
-        lambda **_kwargs: "sha256:image",
-    )
-    monkeypatch.setattr(
-        replayable.runner,
-        "_run_container",
-        lambda _command, **_kwargs: 0,
+    context = RunContext(
+        proxy_process=proxy_stub(
+            REPLAYABLE_STATE_FILE='{"unconsumed_sequences":[2,3]}\n'
+        ),
+        select_replay_image=lambda **_kwargs: "sha256:image",
+        run_container=lambda _command, **_kwargs: 0,
     )
 
-    assert replay_run(cassette=cassette, ca_path=ca_file, strict=strict) == expected
+    assert (
+        replay_run(
+            cassette=cassette,
+            ca_path=ca_file,
+            strict=strict,
+            context=context,
+        )
+        == expected
+    )
     assert "unconsumed flow(s): [2, 3]" in capsys.readouterr().err
 
 
@@ -450,20 +440,13 @@ def test_record_pins_project_rules_in_cassette_manifest(monkeypatch, tmp_path, c
     cassette = tmp_path / "cassette"
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        replayable.runner,
-        "_resolve_image_identity",
-        lambda _image: ("sha256:image", "sha256:image-id"),
-    )
-    monkeypatch.setattr(
-        replayable.runner,
-        "proxy_process",
-        lambda **_kwargs: NullContext(),
-    )
-    monkeypatch.setattr(
-        replayable.runner,
-        "_run_container",
-        lambda _command, **_kwargs: 0,
+    context = RunContext(
+        resolve_image_identity=lambda _image: (
+            "sha256:image",
+            "sha256:image-id",
+        ),
+        proxy_process=lambda **_kwargs: NullContext(),
+        run_container=lambda _command, **_kwargs: 0,
     )
 
     assert (
@@ -472,6 +455,7 @@ def test_record_pins_project_rules_in_cassette_manifest(monkeypatch, tmp_path, c
             command=["workload"],
             out=cassette,
             ca_path=ca_file,
+            context=context,
         )
         == ExitCode.SUCCESS
     )
