@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - name: Check cassette and redaction branch coverage
+        run: >-
+          uv run pytest tests/test_cassette.py tests/test_redact.py
+          --cov=replayable.cassette --cov=replayable.redact --cov-branch
+          --cov-report=term --cov-fail-under=90
+      - name: Check matcher branch coverage
+        run: >-
+          uv run pytest tests/test_matcher.py
+          --cov=replayable.matcher --cov-branch
+          --cov-report=term --cov-fail-under=90
+      - name: Generate mitmproxy CA
+        run: timeout 3 uv run mitmdump || test $? -eq 124
+      - run: docker build -t replayable/agent-base:local images/agent-base
+      - name: Run Milestone 1 acceptance test
+        run: uv run pytest tests/e2e
+        env:
+          REPLAYABLE_RUN_E2E: "1"
