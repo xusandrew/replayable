@@ -6,11 +6,12 @@ import hashlib
 import json
 import os
 from collections.abc import Iterable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from mitmproxy import http
+from mitmproxy import certs, http
 
 from replayable.cassette import CassetteReader, sse_chunk_bytes
 from replayable.matcher import (
@@ -20,6 +21,33 @@ from replayable.matcher import (
     normalize_request,
 )
 from replayable.normalize_rules import load_rules
+
+LEAF_CERT_VALIDITY_MARGIN = timedelta(days=1)
+LEAF_CERT_VALIDITY = LEAF_CERT_VALIDITY_MARGIN * 2
+
+
+def _pin_leaf_certificate_validity(
+    t0_epoch: float,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Make mitmproxy's generated leaf certificates valid at replay time.
+
+    mitmproxy normally backdates each dynamically generated leaf by two days
+    relative to the real host clock. Replay freezes the client at the cassette's
+    older ``t0``, so changing only the CA validity is insufficient: an older
+    cassette still rejects the freshly generated leaf as not yet valid.
+
+    mitmproxy consults this module-level offset when it creates a leaf during
+    the TLS handshake. Move that window to include ``t0`` with a full day of
+    margin. This process serves only one replay, so the scoped global change
+    cannot affect another cassette.
+    """
+
+    now = now or datetime.now()
+    recorded_time = datetime.fromtimestamp(t0_epoch)
+    certs.CERT_VALIDITY_OFFSET = recorded_time - now - LEAF_CERT_VALIDITY_MARGIN
+    certs.CERT_EXPIRY = LEAF_CERT_VALIDITY
 
 
 class RecordedSSEStream:
@@ -70,6 +98,8 @@ class ReplayAddon:
 
         self.reader = CassetteReader(cassette_directory)
         manifest = self.reader.load_manifest()
+        if _loader is not None:
+            _pin_leaf_certificate_validity(float(manifest["t0_epoch"]))
         flows = self.reader.load_flows().flows
         rules = load_rules(self.rules_path)
         recorded_ruleset = manifest.get("ruleset_version")

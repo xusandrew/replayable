@@ -4,6 +4,7 @@ from typer.testing import CliRunner
 
 import replayable.cli
 from replayable.cli import app
+from replayable.doctor import CheckResult, Status
 from replayable.exit_codes import ExitCode
 from replayable.runner import HarnessError
 
@@ -51,3 +52,33 @@ def test_inspect_renders_bundle(monkeypatch):
 def test_inspect_missing_bundle_exits_harness_error():
     result = runner.invoke(app, ["inspect", "--cassette", "some-cassette"])
     assert result.exit_code == ExitCode.HARNESS_ERROR
+
+
+def test_doctor_failure_returns_harness_error(monkeypatch):
+    monkeypatch.setattr(
+        replayable.cli.doctor_module,
+        "run_checks",
+        lambda **_kwargs: [
+            CheckResult("proxy port", Status.FAIL, "8080 is already in use")
+        ],
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == ExitCode.HARNESS_ERROR
+    assert "8080 is already in use" in result.output
+
+
+def test_doctor_warning_remains_non_blocking(monkeypatch):
+    monkeypatch.setattr(
+        replayable.cli.doctor_module,
+        "run_checks",
+        lambda **_kwargs: [
+            CheckResult("clock skew", Status.WARN, "5.0s between clocks")
+        ],
+    )
+
+    result = runner.invoke(app, ["doctor", "--json"])
+
+    assert result.exit_code == ExitCode.SUCCESS
+    assert '"status": "warn"' in result.output
