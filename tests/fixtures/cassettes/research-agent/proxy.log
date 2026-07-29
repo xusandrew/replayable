@@ -1,0 +1,67 @@
+[04:11:54.914] Loading script /Users/andrewxu/Desktop/code/se490/se-490-project/src/replayable/addons/record_addon.py
+[04:11:54.917] HTTP(S) proxy listening at 127.0.0.1:8080.
+[04:11:54.967][127.0.0.1:54756] client connect
+[04:11:54.967][127.0.0.1:54756] client disconnect
+[04:11:55.241][127.0.0.1:54759] client connect
+[04:11:55.322][127.0.0.1:54759] server connect api.anthropic.com:443 (160.79.104.10:443)
+[04:11:56.158][127.0.0.1:54759] Streaming response from api.anthropic.com.
+[04:11:57.195][127.0.0.1:54772] client connect
+[04:11:57.256][127.0.0.1:54772] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:11:57.571][127.0.0.1:54772] client disconnect
+[04:11:57.572][127.0.0.1:54772] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:11:57.578][127.0.0.1:54774] client connect
+[04:11:57.646][127.0.0.1:54774] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:11:57.932][127.0.0.1:54774] client disconnect
+[04:11:57.933][127.0.0.1:54774] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:11:57.941][127.0.0.1:54776] client connect
+[04:11:58.121][127.0.0.1:54776] server connect api.open-meteo.com:443 (188.40.99.226:443)
+[04:11:58.517][127.0.0.1:54776] client disconnect
+[04:11:58.517][127.0.0.1:54776] server disconnect api.open-meteo.com:443 (188.40.99.226:443)
+[04:11:59.169][127.0.0.1:54759] Streaming response from api.anthropic.com.
+[04:11:59.958][127.0.0.1:54778] client connect
+[04:11:59.996][127.0.0.1:54778] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:00.299][127.0.0.1:54778] client disconnect
+[04:12:00.300][127.0.0.1:54778] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:01.114][127.0.0.1:54759] Streaming response from api.anthropic.com.
+[04:12:08.916][127.0.0.1:54759] Streaming response from api.anthropic.com.
+[04:12:10.271][127.0.0.1:54789] client connect
+[04:12:10.329][127.0.0.1:54789] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:10.664][127.0.0.1:54789] client disconnect
+[04:12:10.665][127.0.0.1:54789] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:10.670][127.0.0.1:54791] client connect
+[04:12:10.703][127.0.0.1:54791] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:11.006][127.0.0.1:54791] client disconnect
+[04:12:11.007][127.0.0.1:54791] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:11.012][127.0.0.1:54793] client connect
+[04:12:11.050][127.0.0.1:54793] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:11.465][127.0.0.1:54793] client disconnect
+[04:12:11.466][127.0.0.1:54793] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:11.473][127.0.0.1:54795] client connect
+[04:12:11.514][127.0.0.1:54795] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:11.816][127.0.0.1:54795] client disconnect
+[04:12:11.817][127.0.0.1:54795] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:11.823][127.0.0.1:54797] client connect
+[04:12:11.860][127.0.0.1:54797] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:12.191][127.0.0.1:54797] client disconnect
+[04:12:12.191][127.0.0.1:54797] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:13.831][127.0.0.1:54759] Streaming response from api.anthropic.com.
+[04:12:15.029][127.0.0.1:54800] client connect
+[04:12:15.068][127.0.0.1:54800] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:15.333][127.0.0.1:54800] client disconnect
+[04:12:15.334][127.0.0.1:54800] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:15.341][127.0.0.1:54802] client connect
+[04:12:15.378][127.0.0.1:54802] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:15.673][127.0.0.1:54802] client disconnect
+[04:12:15.674][127.0.0.1:54802] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:15.679][127.0.0.1:54804] client connect
+[04:12:15.712][127.0.0.1:54804] server connect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:15.973][127.0.0.1:54804] client disconnect
+[04:12:15.974][127.0.0.1:54804] server disconnect hn.algolia.com:443 (34.160.168.181:443)
+[04:12:16.894][127.0.0.1:54759] Streaming response from api.anthropic.com.
+[04:12:17.533][127.0.0.1:54806] client connect
+[04:12:17.680][127.0.0.1:54806] server connect api.open-meteo.com:443 (188.40.99.226:443)
+[04:12:18.069][127.0.0.1:54806] client disconnect
+[04:12:18.070][127.0.0.1:54806] server disconnect api.open-meteo.com:443 (188.40.99.226:443)
+[04:12:18.865][127.0.0.1:54759] Streaming response from api.anthropic.com.
+[04:12:26.834][127.0.0.1:54759] client disconnect
+[04:12:26.835][127.0.0.1:54759] server disconnect api.anthropic.com:443 (160.79.104.10:443)
