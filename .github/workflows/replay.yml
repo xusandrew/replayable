@@ -1,0 +1,118 @@
+name: Replay
+
+# The determinism gate. Replays a checked-in golden cassette on a clean runner
+# and fails if the result is not byte-identical to the recording.
+#
+# Run it yourself: Actions → Replay → "Run workflow".
+#
+# This job needs no API key. That is the entire claim being tested — a recorded
+# agent run reproduces offline, for $0.00, without credentials.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cassette:
+        description: "Fixture cassette to replay"
+        type: choice
+        default: research-agent
+        options:
+          - research-agent
+          - curl-demo
+      strict:
+        description: "Fail if any recorded flow goes unserved"
+        type: boolean
+        default: true
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push supersedes an in-flight run on the same ref.
+concurrency:
+  group: replay-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    name: Golden replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      CASSETTE: ${{ github.event.inputs.cassette || 'research-agent' }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Generate a replay CA
+        # mitmproxy backdates a generated CA by only two days, and replay pins
+        # the container clock to the cassette's recorded t0. A stock CA would
+        # therefore stop being able to replay the golden cassette 48 hours
+        # after it was recorded — CI would start failing on a fixed date with a
+        # confusing TLS error. Generate one valid from well before any
+        # cassette in the corpus instead. The key is created fresh per run and
+        # never committed.
+        run: uv run python scripts/make_replay_ca.py --not-before-days 3650 --force
+
+      - name: Diagnose the runner
+        # Prints the environment Replayable is about to use. When this job
+        # fails, this step is the first place to look.
+        run: uv run replayable doctor
+
+      - name: Build the agent image
+        run: |
+          docker build -t replayable/agent-base:local images/agent-base
+          docker build -t replayable/research-agent:local demo/research_agent
+
+      - name: Replay the golden cassette
+        id: replay
+        run: |
+          set -o pipefail
+          # Replay writes its artifacts into the cassette directory, so work on
+          # a copy and leave the checked-in fixture untouched.
+          cp -R "tests/fixtures/cassettes/${CASSETTE}" "${RUNNER_TEMP}/cassette"
+          chmod -R u+w "${RUNNER_TEMP}/cassette"
+
+          # --allow-image-mismatch: the image is rebuilt here, so its ID
+          # legitimately differs from the recorded one. The workspace and
+          # stdout hashes are still asserted exactly, which is the real claim.
+          # Strict image identity is asserted locally, where the recorded image
+          # exists — see tests/acceptance/README.md.
+          uv run replayable replay \
+            --cassette "${RUNNER_TEMP}/cassette" \
+            --allow-image-mismatch \
+            ${{ (github.event.inputs.strict == 'false') && ' ' || '--strict' }} \
+            2>&1 | tee "${RUNNER_TEMP}/replay-output.txt"
+
+      - name: Verify the replay reproduced the recording
+        if: always() && steps.replay.outcome != 'skipped'
+        run: uv run python scripts/check_replay.py "${RUNNER_TEMP}/cassette"
+
+      - name: Run the acceptance suite
+        run: uv run pytest tests/acceptance -v
+        env:
+          REPLAYABLE_RUN_E2E: "1"
+
+      - name: Upload replay artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-${{ env.CASSETTE }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/replay-output.txt
+            ${{ runner.temp }}/cassette/last-replay.json
+            ${{ runner.temp }}/cassette/replay-report.json
+            ${{ runner.temp }}/cassette/replay.log
+            ${{ runner.temp }}/cassette/replay-proxy.log
+            ${{ runner.temp }}/cassette/replay-state.json
+            ${{ runner.temp }}/cassette/replay-agent.stdout
+            ${{ runner.temp }}/cassette/replay-agent.stderr

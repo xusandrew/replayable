@@ -4,9 +4,15 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  lint-and-unit:
+    name: Lint and unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
@@ -16,20 +22,46 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run pytest
-      - name: Check cassette and redaction branch coverage
+
+      # The correctness kernel: modules where a silent bug would corrupt a
+      # recording or serve the wrong recorded response. Held at 90% branch
+      # coverage.
+      - name: Cassette and redaction branch coverage
         run: >-
           uv run pytest tests/test_cassette.py tests/test_redact.py
           --cov=replayable.cassette --cov=replayable.redact --cov-branch
           --cov-report=term --cov-fail-under=90
-      - name: Check matcher branch coverage
+      - name: Matcher branch coverage
         run: >-
           uv run pytest tests/test_matcher.py
           --cov=replayable.matcher --cov-branch
           --cov-report=term --cov-fail-under=90
-      - name: Generate mitmproxy CA
-        run: timeout 3 uv run mitmdump || test $? -eq 124
+
+  e2e:
+    name: Docker end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked
+
+      - name: Generate a replay CA
+        # Deliberately not mitmproxy's own generated CA: it backdates validity
+        # by only two days, which suffices for tests that record their own
+        # cassette but not for replaying any cassette older than that.
+        # See scripts/make_replay_ca.py for the full reasoning.
+        run: uv run python scripts/make_replay_ca.py --not-before-days 3650 --force
+
+      - name: Diagnose the runner
+        run: uv run replayable doctor
+
       - run: docker build -t replayable/agent-base:local images/agent-base
-      - name: Run Milestone 1 acceptance test
-        run: uv run pytest tests/e2e
+
+      - name: End-to-end acceptance tests
+        run: uv run pytest tests/e2e -v
         env:
           REPLAYABLE_RUN_E2E: "1"
