@@ -5,11 +5,17 @@ import hashlib
 import json
 import zlib
 from collections.abc import Callable
+from datetime import datetime
 
-from mitmproxy import http
+from mitmproxy import certs, http
 
 from replayable.addons.record_addon import RecordAddon
-from replayable.addons.replay_addon import ReplayAddon
+from replayable.addons.replay_addon import (
+    LEAF_CERT_VALIDITY,
+    LEAF_CERT_VALIDITY_MARGIN,
+    ReplayAddon,
+    _pin_leaf_certificate_validity,
+)
 from replayable.cassette import CassetteReader, CassetteWriter, base_manifest
 
 
@@ -44,6 +50,23 @@ def make_flow(
             {"content-type": content_type, "x-recorded": "yes"},
         )
     return flow
+
+
+def test_replay_leaf_certificate_window_includes_the_recorded_clock(monkeypatch):
+    """An old cassette must not receive a leaf certificate dated two days ago."""
+
+    now = datetime(2026, 7, 29, 12, 0, 0)
+    recorded = datetime(2020, 1, 2, 3, 4, 5)
+    monkeypatch.setattr(certs, "CERT_VALIDITY_OFFSET", certs.CERT_VALIDITY_OFFSET)
+    monkeypatch.setattr(certs, "CERT_EXPIRY", certs.CERT_EXPIRY)
+
+    _pin_leaf_certificate_validity(recorded.timestamp(), now=now)
+
+    assert now + certs.CERT_VALIDITY_OFFSET == recorded - LEAF_CERT_VALIDITY_MARGIN
+    assert certs.CERT_EXPIRY == LEAF_CERT_VALIDITY
+    assert now + certs.CERT_VALIDITY_OFFSET + certs.CERT_EXPIRY == (
+        recorded + LEAF_CERT_VALIDITY_MARGIN
+    )
 
 
 def test_record_addon_writes_m2_schema_and_redacts_before_hashing(tmp_path):
@@ -158,9 +181,9 @@ def test_sse_chunk_boundary_splitting_a_utf8_codepoint_is_recorded_safely(tmp_pa
 
     recorder.responseheaders(flow)
     stream = flow.response.stream
-    payload = 'data: {"text":"héllo ✓"}\n\n'.encode("utf-8")
+    payload = 'data: {"text":"héllo ✓"}\n\n'.encode()
     # Split inside the two-byte "é" sequence, as TCP is free to do.
-    split = payload.index("é".encode("utf-8")) + 1
+    split = payload.index("é".encode()) + 1
     chunks = [payload[:split], payload[split:]]
     for chunk in chunks:
         stream(chunk)

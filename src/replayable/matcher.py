@@ -7,8 +7,9 @@ import hashlib
 import json
 import re
 from collections import defaultdict, deque
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any
 from urllib.parse import parse_qsl, urlencode
 
 from replayable.cassette import CassetteReader, sha256_bytes

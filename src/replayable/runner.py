@@ -13,10 +13,11 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator, Sequence
+from typing import Any, BinaryIO
 
 from cryptography import x509
 
@@ -90,6 +91,15 @@ def _require_ca(ca_path: Path) -> None:
         )
 
 
+def _mitmproxy_confdir_for_ca(ca_path: Path) -> Path | None:
+    """Use a custom generated CA for signing as well as container trust."""
+
+    combined_ca = ca_path.with_name("mitmproxy-ca.pem")
+    if ca_path.name == "mitmproxy-ca-cert.pem" and combined_ca.is_file():
+        return ca_path.parent
+    return None
+
+
 def _port_is_open(port: int, host: str = "127.0.0.1") -> bool:
     try:
         with socket.create_connection((host, port), timeout=0.1):
@@ -150,19 +160,27 @@ def _proxy_listen_host() -> str:
 
 
 def _require_ca_valid_at(ca_path: Path, t0_epoch: float) -> None:
-    """Fail fast when the pinned clock predates the CA certificate."""
+    """Fail fast unless the CA validity window contains the pinned clock."""
 
     try:
         certificate = x509.load_pem_x509_certificate(ca_path.read_bytes())
     except (OSError, ValueError):
         return  # unreadable CAs already produce mitmproxy's own startup error
     not_before = certificate.not_valid_before_utc.timestamp()
+    not_after = certificate.not_valid_after_utc.timestamp()
     if t0_epoch < not_before:
         raise HarnessError(
             f"the mitmproxy CA at {ca_path} was generated after this cassette's "
             "recording time, so the pinned container clock would see a "
-            "'certificate is not yet valid' TLS failure; restore the CA that "
-            "existed at record time or record a new cassette"
+            "'certificate is not yet valid' TLS failure; use a CA whose "
+            "validity begins before the cassette's t0 (for CI, see "
+            "scripts/make_replay_ca.py)"
+        )
+    if t0_epoch > not_after:
+        raise HarnessError(
+            f"the mitmproxy CA at {ca_path} expired before this cassette's "
+            "recording time, so the pinned container clock would reject it; "
+            "use a CA whose validity includes the cassette's t0"
         )
 
 
@@ -209,6 +227,7 @@ def proxy_process(
     log_path: Path,
     readiness_timeout_seconds: float = 5,
     listen_host: str | None = None,
+    confdir: Path | None = None,
 ) -> Iterator[None]:
     """Start mitmdump, wait for its port, and always stop it with SIGTERM."""
 
@@ -230,22 +249,25 @@ def proxy_process(
     environment = os.environ.copy()
     environment.update(addon_environment)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        mitmdump,
+        "--listen-host",
+        listen_host,
+        "--listen-port",
+        str(port),
+        "-s",
+        str(addon),
+        "--set",
+        "flow_detail=0",
+        "--set",
+        "connection_strategy=lazy",
+    ]
+    if confdir is not None:
+        command.extend(["--set", f"confdir={confdir}"])
     with log_path.open("wb") as proxy_log:
         try:
             process = subprocess.Popen(
-                [
-                    mitmdump,
-                    "--listen-host",
-                    listen_host,
-                    "--listen-port",
-                    str(port),
-                    "-s",
-                    str(addon),
-                    "--set",
-                    "flow_detail=0",
-                    "--set",
-                    "connection_strategy=lazy",
-                ],
+                command,
                 env=environment,
                 stdout=proxy_log,
                 stderr=subprocess.STDOUT,
@@ -710,6 +732,7 @@ def record_run(
             },
             log_path=out / "proxy.log",
             listen_host=listen_host,
+            confdir=_mitmproxy_confdir_for_ca(ca_path),
         ):
             t0_epoch = time.time()
             writer.update_manifest(t0_epoch=t0_epoch)
@@ -909,6 +932,7 @@ def replay_run(
             },
             log_path=cassette / REPLAY_PROXY_LOG_FILE_NAME,
             listen_host=listen_host,
+            confdir=_mitmproxy_confdir_for_ca(ca_path),
         ):
             _log_event(
                 run_log,

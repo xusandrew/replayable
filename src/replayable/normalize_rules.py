@@ -120,7 +120,10 @@ def load_rules(path: Path | None = None) -> NormalizationRules:
         ),
         preserve=tuple(dict.fromkeys(preserved)),
     )
-    rules.compiled_value_patterns
+    # Compile eagerly. An invalid regex in replayable.toml then fails here with
+    # a clear RulesError, rather than inside the proxy's request hook partway
+    # through a replay, where the failure would surface as a mismatch instead.
+    _ = rules.compiled_value_patterns
     return rules
 
 

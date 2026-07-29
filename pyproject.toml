@@ -8,7 +8,6 @@ dependencies = [
     "cryptography>=44.0.0",
     "httpx>=0.28.1",
     "mitmproxy>=12.2.3",
-    "pytest>=9.1.1",
     "typer>=0.26.8",
 ]
 
@@ -21,14 +20,31 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.21",
 ]
 
 [tool.ruff]
 target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# E/F      pycodestyle + pyflakes: the baseline ruff already enforced.
+# I        import sorting, so module moves in the upcoming core/ refactor
+#          produce reviewable diffs instead of import churn.
+# UP       pyupgrade: the codebase is 3.12+ and already uses `X | None`.
+# B        bugbear: catches mutable default args and except-clause mistakes,
+#          both of which matter in the proxy/subprocess lifecycle code.
+# RUF      ruff's own checks, notably RUF012 on mutable class attributes.
+select = ["E", "F", "I", "UP", "B", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally build long literal request/response fixtures.
+"tests/**" = ["E501"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "e2e: Docker and network-backed end-to-end acceptance tests",
 ]
