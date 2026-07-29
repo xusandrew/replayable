@@ -6,6 +6,7 @@ import json
 import pytest
 from conftest import NullContext, stub_manifest
 
+import replayable.core.proxy
 import replayable.runner
 from replayable.cassette import CassetteWriter
 from replayable.exit_codes import ExitCode
@@ -160,15 +161,15 @@ def test_proxy_is_terminated_when_container_work_raises(monkeypatch, tmp_path):
     addon.write_text("", encoding="utf-8")
     port_checks = iter([False, True])
     monkeypatch.setattr(
-        replayable.runner,
+        replayable.core.proxy,
         "_port_is_open",
         lambda _port, _host="127.0.0.1": next(port_checks),
     )
     monkeypatch.setattr(
-        replayable.runner, "_proxy_listen_host", lambda: "127.0.0.1"
+        replayable.core.proxy, "_proxy_listen_host", lambda: "127.0.0.1"
     )
     monkeypatch.setattr(
-        replayable.runner, "_require_executable", lambda _name, _fix: "mitmdump"
+        replayable.core.proxy, "_require_executable", lambda _name, _fix: "mitmdump"
     )
 
     class FakeProcess:
@@ -195,7 +196,7 @@ def test_proxy_is_terminated_when_container_work_raises(monkeypatch, tmp_path):
         observed_command.extend(command)
         return process
 
-    monkeypatch.setattr(replayable.runner.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(replayable.core.proxy.subprocess, "Popen", fake_popen)
 
     with pytest.raises(RuntimeError, match="container failed"):
         with proxy_process(
@@ -216,15 +217,15 @@ def test_proxy_readiness_timeout_still_terminates_process(monkeypatch, tmp_path)
     addon = tmp_path / "addon.py"
     addon.write_text("", encoding="utf-8")
     monkeypatch.setattr(
-        replayable.runner,
+        replayable.core.proxy,
         "_port_is_open",
         lambda _port, _host="127.0.0.1": False,
     )
     monkeypatch.setattr(
-        replayable.runner, "_proxy_listen_host", lambda: "127.0.0.1"
+        replayable.core.proxy, "_proxy_listen_host", lambda: "127.0.0.1"
     )
     monkeypatch.setattr(
-        replayable.runner, "_require_executable", lambda _name, _fix: "mitmdump"
+        replayable.core.proxy, "_require_executable", lambda _name, _fix: "mitmdump"
     )
 
     class FakeProcess:
@@ -241,7 +242,9 @@ def test_proxy_readiness_timeout_still_terminates_process(monkeypatch, tmp_path)
 
     process = FakeProcess()
     monkeypatch.setattr(
-        replayable.runner.subprocess, "Popen", lambda *_args, **_kwargs: process
+        replayable.core.proxy.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: process,
     )
 
     with pytest.raises(HarnessError, match="did not listen"):

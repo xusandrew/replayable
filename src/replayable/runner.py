@@ -6,20 +6,15 @@ import hashlib
 import json
 import os
 import shutil
-import socket
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO
-
-from cryptography import x509
+from typing import Any
 
 from replayable.cassette import (
     CassetteError,
@@ -28,6 +23,35 @@ from replayable.cassette import (
     base_manifest,
     env_fingerprint,
 )
+from replayable.core.ca import (
+    _mitmproxy_confdir_for_ca,
+    _require_ca,
+    _require_ca_valid_at,
+    default_ca_path,
+)
+from replayable.core.container import _copy_stream, _kill_container, _run_container
+from replayable.core.docker import (
+    CONTAINER_CA_PATH,
+    FAKETIME_LIBRARY,
+    PROXY_HOSTNAME,
+    _local_image_id,
+    _require_executable,
+    _resolve_image_identity,
+    _select_replay_image,
+    docker_command,
+    injected_container_environment,
+    replay_time_environment,
+)
+from replayable.core.proxy import (
+    DEFAULT_PROXY_PORT,
+    _port_is_open,
+    _proxy_listen_host,
+    _resolve_port,
+    _stop_proxy,
+    _wait_for_proxy,
+    proxy_process,
+)
+from replayable.errors import HarnessError
 from replayable.exit_codes import ExitCode
 from replayable.normalize_rules import (
     RulesError,
@@ -38,7 +62,6 @@ from replayable.redact import (
     SecretConfigError,
     load_secret_name_overrides,
     parse_env_file,
-    redact_body,
     redacted_placeholder,
     secret_names,
     secret_values,
@@ -50,9 +73,36 @@ from replayable.snapshot import (
     load_recorded_snapshot,
 )
 
-DEFAULT_PROXY_PORT = 8080
-PROXY_HOSTNAME = "host.docker.internal"
-CONTAINER_CA_PATH = "/etc/replayable/ca.pem"
+__all__ = [
+    "CONTAINER_CA_PATH",
+    "DEFAULT_PROXY_PORT",
+    "FAKETIME_LIBRARY",
+    "PROXY_HOSTNAME",
+    "HarnessError",
+    "_copy_stream",
+    "_kill_container",
+    "_local_image_id",
+    "_mitmproxy_confdir_for_ca",
+    "_port_is_open",
+    "_proxy_listen_host",
+    "_require_ca",
+    "_require_ca_valid_at",
+    "_require_executable",
+    "_resolve_image_identity",
+    "_resolve_port",
+    "_run_container",
+    "_select_replay_image",
+    "_stop_proxy",
+    "_wait_for_proxy",
+    "default_ca_path",
+    "docker_command",
+    "injected_container_environment",
+    "proxy_process",
+    "record_run",
+    "replay_run",
+    "replay_time_environment",
+]
+
 REPLAY_REPORT_FILE_NAME = "replay-report.json"
 REPLAY_STATE_FILE_NAME = "replay-state.json"
 RUN_LOG_FILE_NAME = "run.log"
@@ -63,502 +113,6 @@ AGENT_STDERR_FILE_NAME = "agent.stderr"
 REPLAY_STDOUT_FILE_NAME = "replay-agent.stdout"
 REPLAY_STDERR_FILE_NAME = "replay-agent.stderr"
 LAST_REPLAY_FILE_NAME = "last-replay.json"
-FAKETIME_LIBRARY = "/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1"
-
-
-class HarnessError(RuntimeError):
-    """An infrastructure failure with an actionable user-facing message."""
-
-
-def default_ca_path() -> Path:
-    """Return mitmproxy's generated certificate path."""
-
-    return Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem"
-
-
-def _require_executable(name: str, likely_fix: str) -> str:
-    executable = shutil.which(name)
-    if executable is None:
-        raise HarnessError(f"{name} was not found; {likely_fix}")
-    return executable
-
-
-def _require_ca(ca_path: Path) -> None:
-    if not ca_path.is_file():
-        raise HarnessError(
-            f"mitmproxy CA not found at {ca_path}; run `uv run mitmdump` once "
-            "and stop it after startup to generate the certificate"
-        )
-
-
-def _mitmproxy_confdir_for_ca(ca_path: Path) -> Path | None:
-    """Use a custom generated CA for signing as well as container trust."""
-
-    combined_ca = ca_path.with_name("mitmproxy-ca.pem")
-    if ca_path.name == "mitmproxy-ca-cert.pem" and combined_ca.is_file():
-        return ca_path.parent
-    return None
-
-
-def _port_is_open(port: int, host: str = "127.0.0.1") -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=0.1):
-            return True
-    except OSError:
-        return False
-
-
-def _resolve_port(port: int, host: str = "127.0.0.1") -> int:
-    """Resolve port 0 on the same interface the proxy will bind.
-
-    The probe uses ``SO_REUSEADDR`` so mitmdump can rebind immediately after
-    the probe socket closes. This is still a short race under concurrency, but
-    probing the real listen host (not always loopback) avoids the Linux case
-    where a port is free on ``127.0.0.1`` yet taken on the bridge gateway.
-    """
-
-    if port != 0:
-        return port
-    with socket.socket() as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        probe.bind((host, 0))
-        return probe.getsockname()[1]
-
-
-def _proxy_listen_host() -> str:
-    """Bind the proxy to the narrowest interface containers can still reach.
-
-    Docker Desktop (macOS/Windows) forwards host.docker.internal to the host
-    loopback, so 127.0.0.1 suffices. Native Linux containers reach the host at
-    the bridge gateway address, so bind there rather than every interface.
-    """
-
-    if sys.platform != "linux":
-        return "127.0.0.1"
-    completed = subprocess.run(
-        [
-            "docker",
-            "network",
-            "inspect",
-            "bridge",
-            "--format",
-            "{{(index .IPAM.Config 0).Gateway}}",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    gateway = completed.stdout.strip()
-    if completed.returncode == 0 and gateway:
-        return gateway
-    print(
-        "replayable: warning: cannot resolve the Docker bridge gateway; the "
-        "proxy will listen on all interfaces for this run",
-        file=sys.stderr,
-    )
-    return "0.0.0.0"
-
-
-def _require_ca_valid_at(ca_path: Path, t0_epoch: float) -> None:
-    """Fail fast unless the CA validity window contains the pinned clock."""
-
-    try:
-        certificate = x509.load_pem_x509_certificate(ca_path.read_bytes())
-    except (OSError, ValueError):
-        return  # unreadable CAs already produce mitmproxy's own startup error
-    not_before = certificate.not_valid_before_utc.timestamp()
-    not_after = certificate.not_valid_after_utc.timestamp()
-    if t0_epoch < not_before:
-        raise HarnessError(
-            f"the mitmproxy CA at {ca_path} was generated after this cassette's "
-            "recording time, so the pinned container clock would see a "
-            "'certificate is not yet valid' TLS failure; use a CA whose "
-            "validity begins before the cassette's t0 (for CI, see "
-            "scripts/make_replay_ca.py)"
-        )
-    if t0_epoch > not_after:
-        raise HarnessError(
-            f"the mitmproxy CA at {ca_path} expired before this cassette's "
-            "recording time, so the pinned container clock would reject it; "
-            "use a CA whose validity includes the cassette's t0"
-        )
-
-
-def _wait_for_proxy(
-    process: subprocess.Popen[bytes],
-    port: int,
-    timeout_seconds: float,
-    host: str = "127.0.0.1",
-) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        return_code = process.poll()
-        if return_code is not None:
-            raise HarnessError(
-                f"mitmdump exited before becoming ready (exit {return_code}); "
-                "inspect proxy.log for details"
-            )
-        if _port_is_open(port, host):
-            return
-        time.sleep(0.05)
-    raise HarnessError(
-        f"mitmdump did not listen on port {port} within {timeout_seconds:g}s; "
-        "check whether the port is blocked"
-    )
-
-
-def _stop_proxy(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
-
-
-@contextmanager
-def proxy_process(
-    *,
-    addon: Path,
-    port: int,
-    addon_environment: dict[str, str],
-    log_path: Path,
-    readiness_timeout_seconds: float = 5,
-    listen_host: str | None = None,
-    confdir: Path | None = None,
-) -> Iterator[None]:
-    """Start mitmdump, wait for its port, and always stop it with SIGTERM."""
-
-    mitmdump = _require_executable(
-        "mitmdump", "install project dependencies with `uv sync`"
-    )
-    if not addon.is_file():
-        raise HarnessError(
-            f"mitmproxy addon not found at {addon}; reinstall replayable"
-        )
-    listen_host = listen_host if listen_host is not None else _proxy_listen_host()
-    check_host = "127.0.0.1" if listen_host == "0.0.0.0" else listen_host
-    if _port_is_open(port, check_host):
-        raise HarnessError(
-            f"proxy port {port} is already in use; stop the process using that "
-            "port or pass --port 0 to pick a free one"
-        )
-
-    environment = os.environ.copy()
-    environment.update(addon_environment)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        mitmdump,
-        "--listen-host",
-        listen_host,
-        "--listen-port",
-        str(port),
-        "-s",
-        str(addon),
-        "--set",
-        "flow_detail=0",
-        "--set",
-        "connection_strategy=lazy",
-    ]
-    if confdir is not None:
-        command.extend(["--set", f"confdir={confdir}"])
-    with log_path.open("wb") as proxy_log:
-        try:
-            process = subprocess.Popen(
-                command,
-                env=environment,
-                stdout=proxy_log,
-                stderr=subprocess.STDOUT,
-            )
-        except OSError as exc:
-            raise HarnessError(
-                f"failed to start mitmdump: {exc}; verify the uv environment"
-            ) from exc
-
-        try:
-            _wait_for_proxy(process, port, readiness_timeout_seconds, check_host)
-            yield
-            return_code = process.poll()
-            if return_code is not None:
-                raise HarnessError(
-                    f"mitmdump stopped during the container run (exit {return_code}); "
-                    "inspect proxy.log for details"
-                )
-        finally:
-            _stop_proxy(process)
-
-
-def docker_command(
-    *,
-    image: str,
-    command: Sequence[str],
-    port: int,
-    ca_path: Path,
-    run_id: str,
-    workspace: Path | None = None,
-    env_file: Path | None = None,
-    extra_environment: dict[str, str] | None = None,
-) -> list[str]:
-    """Build the Docker CLI invocation for the proxy and CA contract."""
-
-    docker_args = [
-        "docker",
-        "run",
-        "--rm",
-        "--name",
-        f"replayable-{run_id}",
-        "--add-host=host.docker.internal:host-gateway",
-        "-v",
-        f"{ca_path}:{CONTAINER_CA_PATH}:ro",
-    ]
-    if workspace is not None:
-        docker_args.extend(["-v", f"{workspace.resolve()}:/workspace"])
-    if env_file is not None:
-        docker_args.extend(["--env-file", str(env_file.resolve())])
-    environment = dict(extra_environment or {})
-    environment.update(injected_container_environment(port))
-    for name, value in environment.items():
-        docker_args.extend(["-e", f"{name}={value}"])
-    docker_args.extend([image, *command])
-    return docker_args
-
-
-def injected_container_environment(port: int) -> dict[str, str]:
-    """Environment values Replayable always injects after the user's env file."""
-
-    proxy_url = f"http://{PROXY_HOSTNAME}:{port}"
-    return {
-        "HTTP_PROXY": proxy_url,
-        "HTTPS_PROXY": proxy_url,
-        "NO_PROXY": "localhost,127.0.0.1",
-        "SSL_CERT_FILE": CONTAINER_CA_PATH,
-        "REQUESTS_CA_BUNDLE": CONTAINER_CA_PATH,
-        "CURL_CA_BUNDLE": CONTAINER_CA_PATH,
-        "NODE_EXTRA_CA_CERTS": CONTAINER_CA_PATH,
-        "PYTHONHASHSEED": "0",
-    }
-
-
-def replay_time_environment(t0_epoch: float) -> dict[str, str]:
-    """Return libfaketime settings that pin replay to the recording epoch."""
-
-    formatted = datetime.fromtimestamp(t0_epoch, UTC).strftime("%Y-%m-%d %H:%M:%S")
-    return {
-        "LD_PRELOAD": FAKETIME_LIBRARY,
-        "FAKETIME": formatted,
-        "FAKETIME_DONT_FAKE_MONOTONIC": "1",
-    }
-
-
-def _copy_stream(
-    source: BinaryIO,
-    destination: BinaryIO,
-    mirror: BinaryIO,
-    secrets: dict[str, str] | None = None,
-) -> None:
-    """Mirror a stream live while writing a secret-redacted copy to disk.
-
-    Both the on-disk transcript and the live TTY/CI mirror are redacted so
-    console capture cannot undo cassette redaction. Hold back the last
-    ``max_secret_length - 1`` bytes so a secret split across read boundaries is
-    still replaced once it completes.
-    """
-
-    secrets = {name: value for name, value in (secrets or {}).items() if value}
-    if not secrets:
-        for chunk in iter(lambda: source.read(64 * 1024), b""):
-            destination.write(chunk)
-            destination.flush()
-            mirror.write(chunk)
-            mirror.flush()
-        return
-
-    hold = max(len(value.encode("utf-8")) for value in secrets.values()) - 1
-    carry = b""
-    for chunk in iter(lambda: source.read(64 * 1024), b""):
-        redacted = redact_body(carry + chunk, secrets)
-        split = max(len(redacted) - hold, 0)
-        emitted = redacted[:split]
-        destination.write(emitted)
-        destination.flush()
-        mirror.write(emitted)
-        mirror.flush()
-        carry = redacted[split:]
-    destination.write(carry)
-    destination.flush()
-    mirror.write(carry)
-    mirror.flush()
-
-
-def _kill_container(name: str) -> None:
-    subprocess.run(
-        ["docker", "kill", name],
-        check=False,
-        capture_output=True,
-    )
-
-
-def _run_container(
-    command: list[str],
-    *,
-    stdout_path: Path | None = None,
-    stderr_path: Path | None = None,
-    redaction_secrets: dict[str, str] | None = None,
-    container_name: str | None = None,
-    timeout_seconds: float | None = None,
-) -> int:
-    _require_executable("docker", "install Docker and make sure it is on PATH")
-
-    def wait_with_watchdog(process: subprocess.Popen[bytes]) -> int:
-        try:
-            return process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            if container_name is not None:
-                _kill_container(container_name)
-            process.wait()
-            raise HarnessError(
-                f"container did not finish within {timeout_seconds:g}s and was "
-                "killed; frozen wall-clock deadlines inside the workload are a "
-                "known cause (see docs/limitations.md)"
-            ) from None
-
-    try:
-        if stdout_path is None or stderr_path is None:
-            process = subprocess.Popen(command)
-            return_code = wait_with_watchdog(process)
-        else:
-            stdout_path.parent.mkdir(parents=True, exist_ok=True)
-            with (
-                stdout_path.open("wb") as stdout_file,
-                stderr_path.open("wb") as stderr_file,
-            ):
-                process = subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                assert process.stdout is not None
-                assert process.stderr is not None
-                stdout_thread = threading.Thread(
-                    target=_copy_stream,
-                    args=(
-                        process.stdout,
-                        stdout_file,
-                        sys.stdout.buffer,
-                        redaction_secrets,
-                    ),
-                    daemon=True,
-                )
-                stderr_thread = threading.Thread(
-                    target=_copy_stream,
-                    args=(
-                        process.stderr,
-                        stderr_file,
-                        sys.stderr.buffer,
-                        redaction_secrets,
-                    ),
-                    daemon=True,
-                )
-                stdout_thread.start()
-                stderr_thread.start()
-                try:
-                    return_code = wait_with_watchdog(process)
-                finally:
-                    stdout_thread.join()
-                    stderr_thread.join()
-    except OSError as exc:
-        raise HarnessError(
-            f"failed to start Docker: {exc}; make sure Docker Desktop or Docker Engine is running"
-        ) from exc
-    if return_code == 125:
-        raise HarnessError(
-            "Docker could not launch the container (exit 125); check the image name, "
-            "Docker daemon, and the preceding Docker error"
-        )
-    return return_code
-
-
-def _resolve_image_identity(image: str) -> tuple[str, str]:
-    """Return the image's pullable digest and immutable local image ID.
-
-    The local ID is the ground truth for "these exact bytes ran"; the repo
-    digest (when present) additionally lets another machine pull the image.
-    """
-
-    _require_executable("docker", "install Docker and make sure it is on PATH")
-    completed = subprocess.run(
-        [
-            "docker",
-            "image",
-            "inspect",
-            "--format",
-            "{{.Id}}\t{{json .RepoDigests}}",
-            image,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0 or "\t" not in completed.stdout:
-        detail = completed.stderr.strip() or "image is not available locally"
-        raise HarnessError(
-            f"Docker cannot inspect image {image!r}: {detail}; build or pull it first"
-        )
-    image_id, _tab, digests_json = completed.stdout.strip().partition("\t")
-    try:
-        repo_digests = json.loads(digests_json)
-    except json.JSONDecodeError:
-        repo_digests = []
-    if not image_id:
-        raise HarnessError(f"Docker cannot resolve an immutable ID for {image!r}")
-    digest = (
-        str(repo_digests[0])
-        if isinstance(repo_digests, list) and repo_digests
-        else image_id
-    )
-    return digest, image_id
-
-
-def _local_image_id(reference: str) -> str | None:
-    completed = subprocess.run(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", reference],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        return None
-    return completed.stdout.strip() or None
-
-
-def _select_replay_image(
-    *,
-    image_ref: str,
-    image_digest: str,
-    image_id: str,
-    allow_image_mismatch: bool,
-) -> str:
-    """Require the exact recorded image bytes unless the escape hatch is set."""
-
-    _require_executable("docker", "install Docker and make sure it is on PATH")
-    if _local_image_id(image_id) is not None:
-        return image_id
-    if image_digest != image_id and _local_image_id(image_digest) == image_id:
-        return image_digest
-    if allow_image_mismatch:
-        print(
-            "replayable: warning: the recorded image bytes are unavailable; "
-            f"using mutable reference {image_ref!r}",
-            file=sys.stderr,
-        )
-        return image_ref
-    raise HarnessError(
-        f"recorded image (id {image_id!r}, digest {image_digest!r}) is not "
-        "present locally; pull/build that exact image or pass "
-        "--allow-image-mismatch for development"
-    )
 
 
 def _log_event(path: Path, event: str, **fields: object) -> None:

@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 
 from replayable.cassette import CassetteError, CassetteReader, sse_chunk_bytes
+from replayable.errors import HarnessError
 from replayable.matcher import RawRequest, normalize_request
 from replayable.normalize_rules import RulesError, discover_rules_path, load_rules
-from replayable.runner import HarnessError
 
 
 def _display_body(body: bytes) -> str | dict[str, str]:
