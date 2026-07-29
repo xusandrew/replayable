@@ -42,8 +42,10 @@ Thumbs.db
 *.swo
 *~
 
-# Local cassette / workspace artifacts (recordings stay out of git by default)
-cassettes/
+# Local cassette / workspace artifacts (recordings stay out of git by default).
+# Anchored to the repo root so the checked-in acceptance corpus under
+# tests/fixtures/cassettes/ stays tracked.
+/cassettes/
 *.cassette/
 workspace.tar.gz
 workspace.sha256

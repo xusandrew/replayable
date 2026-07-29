@@ -1,0 +1,20 @@
+[03:49:17.248] Loading script /Users/andrewxu/Desktop/code/se490/se-490-project/src/replayable/addons/record_addon.py
+[03:49:17.250] HTTP(S) proxy listening at *:8080.
+[03:49:17.296][127.0.0.1:55852] client connect
+[03:49:17.296][127.0.0.1:55852] client disconnect
+[03:49:17.481][127.0.0.1:55854] client connect
+[03:49:17.587][127.0.0.1:55854] server connect api.github.com:443 (140.82.114.5:443)
+[03:49:17.695][127.0.0.1:55854] client disconnect
+[03:49:17.695][127.0.0.1:55854] server disconnect api.github.com:443 (140.82.114.5:443)
+[03:49:17.702][127.0.0.1:55856] client connect
+[03:49:17.765][127.0.0.1:55856] server connect api.github.com:443 (140.82.114.5:443)
+[03:49:17.856][127.0.0.1:55856] client disconnect
+[03:49:17.857][127.0.0.1:55856] server disconnect api.github.com:443 (140.82.114.5:443)
+[03:49:17.868][127.0.0.1:55858] client connect
+[03:49:17.935][127.0.0.1:55858] server connect api.github.com:443 (140.82.114.5:443)
+[03:49:18.030][127.0.0.1:55858] client disconnect
+[03:49:18.030][127.0.0.1:55858] server disconnect api.github.com:443 (140.82.114.5:443)
+[03:49:18.043][127.0.0.1:55860] client connect
+[03:49:18.115][127.0.0.1:55860] server connect httpbin.org:443 (3.233.92.44:443)
+[03:49:18.244][127.0.0.1:55860] client disconnect
+[03:49:18.245][127.0.0.1:55860] server disconnect httpbin.org:443 (3.233.92.44:443)

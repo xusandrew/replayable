@@ -1,0 +1,5 @@
+{"event":"proxy_start","mode":"record","port":8080,"timestamp":"2026-07-29T08:11:54.657254Z"}
+{"event":"container_start","image_digest":"replayable/research-agent@sha256:cd398ef53ea720e85cb9c90a032db433049d7a113109bc7de7b040912d080999","image_id":"sha256:cd398ef53ea720e85cb9c90a032db433049d7a113109bc7de7b040912d080999","mode":"record","run_id":"e3195bf04bd6","timestamp":"2026-07-29T08:11:54.928506Z"}
+{"event":"container_exit","mode":"record","return_code":0,"timestamp":"2026-07-29T08:12:26.969057Z","wall_time_seconds":32.04012729198439}
+{"event":"workspace_snapshot","file_count":2,"sha256":"72bd67c68b499f79ee72551e98acc72f2c01cedc94bf7a02d9ba99e2d561295d","timestamp":"2026-07-29T08:12:27.044184Z"}
+{"event":"record_complete","flow_count":20,"timestamp":"2026-07-29T08:12:27.045855Z"}

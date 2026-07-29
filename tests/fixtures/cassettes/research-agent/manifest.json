@@ -1,0 +1,39 @@
+{
+  "cassette_version": "1.0",
+  "command": [
+    "python",
+    "/app/agent.py",
+    "deterministic replay for LLM agents"
+  ],
+  "created_at": "2026-07-29T08:11:54.655468Z",
+  "env_fingerprint": "sha256:8f2c257fa4427f3f32ba74845ab135474461feaca1291f0221176e3bec01c878",
+  "env_names": [
+    "ANTHROPIC_API_KEY"
+  ],
+  "flow_count": 20,
+  "harness_version": "0.1.0",
+  "image": {
+    "digest": "replayable/research-agent@sha256:cd398ef53ea720e85cb9c90a032db433049d7a113109bc7de7b040912d080999",
+    "id": "sha256:cd398ef53ea720e85cb9c90a032db433049d7a113109bc7de7b040912d080999",
+    "ref": "replayable/research-agent:local"
+  },
+  "nonsecret_env": {},
+  "record_wall_time_seconds": 32.04012729198439,
+  "redaction": {
+    "headers": [
+      "authorization",
+      "x-api-key",
+      "api-key",
+      "cookie",
+      "set-cookie"
+    ]
+  },
+  "ruleset_version": "sha256:e5cb2f10821e71e31d58ec21643a8ee19764955e5cbd16934111a2ea4eb569b4",
+  "secret_env_names": [
+    "ANTHROPIC_API_KEY"
+  ],
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "e8ddc3c0083eeb2763e864e1cc895925e851e0c715e8f1e1890aab0172a5aa60",
+  "t0_epoch": 1785312714.927677,
+  "workspace_sha256": "72bd67c68b499f79ee72551e98acc72f2c01cedc94bf7a02d9ba99e2d561295d"
+}
