@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +16,7 @@ from replayable.cassette import (
     base_manifest,
     env_fingerprint,
     sha256_bytes,
+    sse_chunk_bytes,
 )
 
 
@@ -197,3 +201,135 @@ def test_environment_fingerprint_hides_secret_values():
     assert first == second
     assert "real-first" not in first
     assert json.dumps(first)
+
+
+# ---------------------------------------------------------------------------
+# Crash safety and decoding edge cases.
+#
+# These paths are what stand between a killed recording and a corrupt bundle,
+# so they are worth covering explicitly rather than by accident.
+# ---------------------------------------------------------------------------
+
+
+def test_sse_chunk_decodes_base64_representation():
+    """Chunks that were not valid UTF-8 are stored base64 and round-trip."""
+
+    raw = b"\xff\xfe binary sse payload"
+    encoded = base64.b64encode(raw).decode("ascii")
+
+    assert sse_chunk_bytes({"data_base64": encoded}) == raw
+
+
+def test_sse_chunk_rejects_corrupt_base64():
+    with pytest.raises(CassetteError, match="invalid base64 SSE chunk"):
+        sse_chunk_bytes({"data_base64": "not-valid-base64!!"})
+
+
+def test_sse_chunk_rejects_unknown_representation():
+    """An unrecognised chunk shape names the keys it actually saw."""
+
+    with pytest.raises(CassetteError, match="invalid SSE chunk representation"):
+        sse_chunk_bytes({"data_utf16": "surprise"})
+
+
+def test_manifest_omits_optional_fields_when_not_supplied():
+    """image.id and ruleset_version are optional; older bundles lack both."""
+
+    built = base_manifest(
+        created_at="2026-07-14T00:00:00Z",
+        t0_epoch=0.0,
+        image_ref="example:latest",
+        image_digest="sha256:image",
+        command=["workload"],
+        environment_fingerprint="sha256:env",
+    )
+
+    assert "id" not in built["image"]
+    assert "ruleset_version" not in built
+    assert built["image"] == {"ref": "example:latest", "digest": "sha256:image"}
+
+
+def test_failed_manifest_write_leaves_no_temporary_file(tmp_path):
+    """An atomic write that dies mid-flight must not litter the bundle.
+
+    Recording writes the manifest repeatedly as the run progresses. If a
+    failure left `.manifest.json.*.tmp` files behind, a bundle would slowly
+    fill with garbage that looks like cassette content.
+    """
+
+    writer = CassetteWriter(tmp_path)
+    writer.initialize(manifest())
+
+    with pytest.raises(TypeError):
+        # object() is not JSON-serializable, so json.dump raises partway.
+        writer.write_manifest({"unserializable": object()})
+
+    assert not list(tmp_path.glob(".manifest.json.*"))
+    # The previous manifest survived, because the replace never happened.
+    assert CassetteReader(tmp_path).load_manifest()["cassette_version"]
+
+
+def test_failed_blob_write_leaves_no_temporary_file(tmp_path, monkeypatch):
+    """Same guarantee for body blobs, which are far larger and more frequent."""
+
+    writer = CassetteWriter(tmp_path)
+    writer.initialize(manifest())
+
+    def failing_fsync(_descriptor):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "fsync", failing_fsync)
+
+    with pytest.raises(OSError, match="disk full"):
+        writer.represent_body(b"x" * (BLOB_THRESHOLD_BYTES + 1))
+
+    assert not list((tmp_path / "blobs").glob(".*"))
+
+
+def test_blob_write_tolerates_a_concurrent_writer(tmp_path, monkeypatch):
+    """Two writers racing on the same content must not fail.
+
+    Blobs are content-addressed, so a losing race means the identical bytes
+    are already there. Treating that as an error would make concurrent
+    recording spuriously fail.
+    """
+
+    writer = CassetteWriter(tmp_path)
+    writer.initialize(manifest())
+    body = b"y" * (BLOB_THRESHOLD_BYTES + 1)
+    digest = sha256_bytes(body)
+
+    original_replace = Path.replace
+    calls = {"count": 0}
+
+    def racing_replace(self, target):
+        # Simulate the other writer having landed the identical blob first.
+        if Path(target).name == digest:
+            calls["count"] += 1
+            Path(target).write_bytes(body)
+            raise FileExistsError(target)
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", racing_replace)
+
+    representation = writer.represent_body(body)
+
+    assert calls["count"] == 1
+    assert representation == {"blob": f"blobs/{digest}"}
+    assert not list((tmp_path / "blobs").glob(".*"))
+    monkeypatch.undo()
+    assert CassetteReader(tmp_path).read_body(representation) == body
+
+
+def test_unreadable_flow_file_reports_the_path(tmp_path):
+    """A non-FileNotFound OSError still produces an actionable CassetteError."""
+
+    writer = CassetteWriter(tmp_path)
+    writer.initialize(manifest())
+    # Replace flows.jsonl with a directory: read_bytes raises IsADirectoryError.
+    flow_path = tmp_path / "flows.jsonl"
+    flow_path.unlink()
+    flow_path.mkdir()
+
+    with pytest.raises(CassetteError, match="flow file is unreadable"):
+        CassetteReader(tmp_path).load_flows()

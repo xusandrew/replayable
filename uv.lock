@@ -965,12 +965,12 @@ dependencies = [
     { name = "cryptography" },
     { name = "httpx" },
     { name = "mitmproxy" },
-    { name = "pytest" },
     { name = "typer" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
@@ -980,12 +980,12 @@ requires-dist = [
     { name = "cryptography", specifier = ">=44.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "mitmproxy", specifier = ">=12.2.3" },
-    { name = "pytest", specifier = ">=9.1.1" },
     { name = "typer", specifier = ">=0.26.8" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff", specifier = ">=0.15.21" },
 ]
