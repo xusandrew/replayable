@@ -26,6 +26,14 @@ From the CLI:
 gh workflow run replay.yml -f cassette=research-agent -f strict=true
 ```
 
+While the workflow is being reviewed on an unmerged branch, dispatch that
+branch explicitly because GitHub otherwise resolves the workflow on `main`:
+
+```bash
+gh workflow run replay.yml --ref pr03-ci-and-doctor \
+  -f cassette=research-agent -f strict=true
+```
+
 Then watch it:
 
 ```bash
