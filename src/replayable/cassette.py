@@ -8,9 +8,10 @@ import json
 import os
 import shutil
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from replayable import __version__
 

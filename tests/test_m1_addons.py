@@ -158,9 +158,9 @@ def test_sse_chunk_boundary_splitting_a_utf8_codepoint_is_recorded_safely(tmp_pa
 
     recorder.responseheaders(flow)
     stream = flow.response.stream
-    payload = 'data: {"text":"héllo ✓"}\n\n'.encode("utf-8")
+    payload = 'data: {"text":"héllo ✓"}\n\n'.encode()
     # Split inside the two-byte "é" sequence, as TCP is free to do.
-    split = payload.index("é".encode("utf-8")) + 1
+    split = payload.index("é".encode()) + 1
     chunks = [payload[:split], payload[split:]]
     for chunk in chunks:
         stream(chunk)

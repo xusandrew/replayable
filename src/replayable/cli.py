@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 
@@ -31,15 +31,15 @@ def record(
         typer.Argument(help="Command and args to run inside the container."),
     ],
     workspace: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--workspace", help="Host directory mounted at /workspace."),
     ] = None,
     env_file: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--env-file", help="Env file passed into the container."),
     ] = None,
     out: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--out", help="Cassette output directory."),
     ] = None,
     port: Annotated[
@@ -47,11 +47,11 @@ def record(
         typer.Option("--port", help="Proxy port; 0 picks a free ephemeral port."),
     ] = DEFAULT_PROXY_PORT,
     ca_path: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--ca-path", help="mitmproxy CA certificate path."),
     ] = None,
     timeout: Annotated[
-        Optional[float],
+        float | None,
         typer.Option("--timeout", help="Kill the container after this many seconds."),
     ] = None,
 ) -> None:
@@ -91,7 +91,7 @@ def replay(
         typer.Option("--strict", help="Treat unconsumed flows as a mismatch."),
     ] = False,
     out_workspace: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--out-workspace", help="Directory for the replay workspace."),
     ] = None,
     allow_image_mismatch: Annotated[
@@ -106,11 +106,11 @@ def replay(
         typer.Option("--port", help="Proxy port; 0 picks a free ephemeral port."),
     ] = DEFAULT_PROXY_PORT,
     ca_path: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--ca-path", help="mitmproxy CA certificate path."),
     ] = None,
     timeout: Annotated[
-        Optional[float],
+        float | None,
         typer.Option("--timeout", help="Kill the container after this many seconds."),
     ] = None,
 ) -> None:
@@ -141,15 +141,15 @@ def replay(
 @app.command()
 def inspect(
     cassette: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--cassette", help="Cassette directory to inspect."),
     ] = None,
     flow: Annotated[
-        Optional[int],
+        int | None,
         typer.Option("--flow", help="Pretty-print a single flow by sequence number."),
     ] = None,
     explain_match_path: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option(
             "--explain-match",
             help="Explain normalization for a request JSON file.",

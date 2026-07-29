@@ -13,9 +13,9 @@ from urllib.parse import urlsplit
 from mitmproxy import http
 
 from replayable.cassette import (
+    DEFAULT_REDACTED_HEADERS,
     CassetteReader,
     CassetteWriter,
-    DEFAULT_REDACTED_HEADERS,
     sha256_bytes,
 )
 from replayable.redact import redact_body, redact_headers

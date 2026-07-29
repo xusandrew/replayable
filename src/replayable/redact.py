@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Iterable, Mapping
 
 SECRET_NAME_PATTERN = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD)", re.IGNORECASE)
 # userinfo credentials inside a URL, e.g. postgres://user:hunter2@host/db

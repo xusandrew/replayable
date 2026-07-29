@@ -13,10 +13,11 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator, Sequence
+from typing import Any, BinaryIO
 
 from cryptography import x509
 
