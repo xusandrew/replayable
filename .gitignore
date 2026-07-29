@@ -47,7 +47,7 @@ Thumbs.db
 # tests/fixtures/cassettes/ stays tracked.
 /cassettes/
 *.cassette/
-workspace.tar.gz
-workspace.sha256
+/workspace.tar.gz
+/workspace.sha256
 
 replayable-mvp-implementation-spec.md
