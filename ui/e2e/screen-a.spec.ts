@@ -3,6 +3,12 @@ import { expect, test } from "@playwright/test";
 test("shows a real cassette mismatch as the offline Screen A dashboard", async ({
   page,
 }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
   await page.route("**/api/cassettes", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -113,4 +119,5 @@ test("shows a real cassette mismatch as the offline Screen A dashboard", async (
     path: "../docs/screenshots/dashboard-screen-a.png",
     fullPage: false,
   });
+  expect(browserErrors).toEqual([]);
 });

@@ -50,7 +50,7 @@ Thumbs.db
 /workspace.tar.gz
 /workspace.sha256
 
-# Dashboard build and test outputs (the packaged static export is tracked).
+# Dashboard build and test outputs (the packaged static bundle is tracked).
 /ui/.next/
 /ui/node_modules/
 /ui/out/

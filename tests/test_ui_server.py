@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -8,6 +9,7 @@ from pathlib import Path
 
 from conftest import stub_manifest
 
+import replayable
 from replayable.cassette import CassetteWriter
 from replayable.exit_codes import ExitCode
 from replayable.snapshot import create_snapshot
@@ -63,6 +65,19 @@ def make_cassette(root: Path, name: str = "demo") -> Path:
 
 def payload(response) -> dict:
     return json.loads(response.body)
+
+
+def test_packaged_dashboard_uses_external_vite_assets():
+    static = Path(replayable.__file__).parent / "ui_static"
+    index = (static / "index.html").read_text(encoding="utf-8")
+
+    assert re.search(
+        r'<script[^>]+src="/assets/[^"]+\.js"[^>]*></script>',
+        index,
+    )
+    assert not re.search(r"<script(?![^>]*\bsrc=)", index)
+    assert "_next" not in index
+    assert any((static / "assets").glob("*.css"))
 
 
 def test_read_routes_return_stable_cassette_views(tmp_path):
@@ -154,19 +169,23 @@ def test_static_assets_are_contained_and_support_spa_fallback(tmp_path):
     static = tmp_path / "static"
     static.mkdir()
     (static / "index.html").write_text("<h1>dashboard</h1>", encoding="utf-8")
-    (static / "app.js").write_text("console.log('ok')", encoding="utf-8")
+    assets = static / "assets"
+    assets.mkdir()
+    (assets / "app-hash.js").write_text("console.log('ok')", encoding="utf-8")
     app = UIApp(root, static_dir=static)
 
     index = app.handle("GET", "/runs/demo")
     assert index.status == 200
     assert index.body == b"<h1>dashboard</h1>"
-    script = app.handle("GET", "/app.js")
+    script = app.handle("GET", "/assets/app-hash.js")
     assert script.headers["content-type"] in {
         "text/javascript",
         "application/javascript",
     }
+    assert script.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert index.headers["cache-control"] == "no-cache"
     assert app.handle("GET", "/../pyproject.toml").status == 404
-    assert app.handle("POST", "/app.js").status == 405
+    assert app.handle("POST", "/assets/app-hash.js").status == 405
 
 
 def test_write_routes_require_explicit_flag_and_local_json_origin(tmp_path):
@@ -355,9 +374,10 @@ def test_http_adapter_binds_loopback_and_preserves_api_errors(tmp_path):
             assert response.status == 200
             assert json.load(response)["cassettes"][0]["name"] == "demo"
             assert response.headers["x-content-type-options"] == "nosniff"
-            assert "connect-src 'self'" in response.headers[
-                "content-security-policy"
-            ]
+            csp = response.headers["content-security-policy"]
+            assert "connect-src 'self'" in csp
+            assert "script-src 'self';" in csp
+            assert "script-src 'self' 'unsafe-inline'" not in csp
 
         request = urllib.request.Request(
             f"{base}/api/cassettes/demo/replay",

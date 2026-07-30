@@ -2,10 +2,11 @@
   "name": "replayable-dashboard",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@10.16.1",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build && node scripts/copy-static.mjs",
+    "dev": "vite",
+    "build": "vite build && node scripts/copy-static.mjs",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -13,7 +14,6 @@
   },
   "dependencies": {
     "lucide-react": "0.468.0",
-    "next": "16.2.12",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
@@ -25,9 +25,11 @@
     "@types/node": "22.19.15",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.5",
     "jsdom": "27.4.0",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
+    "vite": "8.2.0",
     "vitest": "4.1.10"
   }
 }

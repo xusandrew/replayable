@@ -496,7 +496,7 @@ class UIApp:
                 "content-length": str(len(payload)),
                 "cache-control": (
                     "public, max-age=31536000, immutable"
-                    if "_next" in relative.parts
+                    if relative.parts[:1] == ("assets",)
                     else "no-cache"
                 ),
             },
@@ -535,14 +535,13 @@ def _handler(app: UIApp) -> type[BaseHTTPRequestHandler]:
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.send_header("x-content-type-options", "nosniff")
-            # Next's static export uses inline bootstrap records to hydrate.
-            # No user-controlled HTML is rendered; API data is inserted by
-            # React as text. Keep all network sources local while permitting
-            # that generated bootstrap and Tailwind's inline style attributes.
+            # Vite emits external module scripts, so script execution can stay
+            # self-only. React uses inline style attributes for measured bars
+            # and score rings; keep those styles local while permitting them.
             self.send_header(
                 "content-security-policy",
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline'; "
+                "script-src 'self'; "
                 "style-src 'self' 'unsafe-inline'; "
                 "connect-src 'self'; img-src 'self' data:",
             )
