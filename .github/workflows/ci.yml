@@ -28,7 +28,7 @@ jobs:
       # coverage.
       - name: Cassette and redaction branch coverage
         run: >-
-          uv run pytest tests/test_cassette.py tests/test_redact.py
+          uv run pytest tests/test_cassette.py tests/test_events.py tests/test_redact.py
           --cov=replayable.cassette --cov=replayable.redact --cov-branch
           --cov-report=term --cov-fail-under=90
       - name: Matcher branch coverage
