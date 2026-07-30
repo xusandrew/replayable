@@ -144,6 +144,16 @@ uv run replayable replay \
 The response sequence is stable, but which thread prints response 1 versus 2
 can swap. Serialize identical requests for the MVP.
 
+## Release status
+
+The automated suite — unit tests, Docker end-to-end tests, and the golden
+acceptance replay of the checked-in `research-agent` cassette — passes. What is
+not in the repository is `results/`: the 100-run determinism proof and the
+latency/cost benchmark are generated from a real recording rather than
+committed, so they must be produced locally before being cited. See
+[Generate the evaluation results](development.md#generate-the-evaluation-results).
+Tag `v0.1.0` once those generated results have been reviewed and committed.
+
 ## Other explicit constraints
 
 - Docker containers only.
