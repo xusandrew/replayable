@@ -23,7 +23,7 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listCassettes,
   loadExplain,
@@ -64,6 +64,16 @@ async function optional<T>(operation: Promise<T>): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+function emptyRun(): RunData {
+  return {
+    timeline: [],
+    mismatch: null,
+    flow: null,
+    explain: null,
+    forkResult: null,
+  };
 }
 
 function Sidebar({
@@ -214,7 +224,7 @@ function BehaviorBanner({
   total,
   onViewDiff,
 }: {
-  mismatchAt: number;
+  mismatchAt: number | null;
   served: number;
   total: number;
   onViewDiff: () => void;
@@ -227,13 +237,18 @@ function BehaviorBanner({
       <span className="banner-copy">
         <strong>Behavior changed</strong>
         <span>
-          Replay stopped at flow {mismatchAt}. The outgoing model request no
-          longer matches the recorded baseline.
+          {mismatchAt === null
+            ? "Replay emitted an outgoing request, but this cassette has no recorded candidate to compare."
+            : `Replay stopped at flow ${mismatchAt}. The outgoing model request no longer matches the recorded baseline.`}
         </span>
       </span>
       <span className="banner-stats">
         <b>exit 2</b>
-        <span>mismatch at flow {mismatchAt}</span>
+        <span>
+          {mismatchAt === null
+            ? "no recorded candidate"
+            : `mismatch at flow ${mismatchAt}`}
+        </span>
         <span>
           {served}/{total} served
         </span>
@@ -386,18 +401,14 @@ export function Dashboard() {
   const [replaceBaseline, setReplaceBaseline] = useState(false);
   const [envFile, setEnvFile] = useState("");
   const [forkAt, setForkAt] = useState(3);
+  const runRequest = useRef(0);
 
   const loadRun = useCallback(async (name: string) => {
+    const request = ++runRequest.current;
     const timeline = await optional(loadTimeline(name));
     if (!timeline) {
       // Never dress a real cassette in another run's fabricated mismatch.
-      setRun({
-        timeline: [],
-        mismatch: null,
-        flow: null,
-        explain: null,
-        forkResult: null,
-      });
+      if (request === runRequest.current) setRun(emptyRun());
       return;
     }
     const [mismatch, forkResult] = await Promise.all([
@@ -412,6 +423,9 @@ export function Dashboard() {
     const effectiveTimeline = forkResult
       ? hybridTimeline(timeline, forkResult.fork_at, forkResult.events)
       : timeline;
+    // A slower response for a previously selected cassette must not overwrite
+    // the run that is currently on screen.
+    if (request !== runRequest.current) return;
     setRun({
       timeline: effectiveTimeline,
       mismatch,
@@ -443,8 +457,14 @@ export function Dashboard() {
   const cassette =
     cassettes.find((item) => item.name === selected) ?? cassettes[0];
   const mismatchAt = mismatchSequence(run.mismatch);
+  const hasMismatch = run.mismatch !== null;
   const hybrid = run.forkResult;
-  const served = mismatchAt === null ? run.timeline.length : mismatchAt - 1;
+  const served =
+    mismatchAt === null
+      ? hasMismatch
+        ? 0
+        : run.timeline.length
+      : mismatchAt - 1;
   const progress = Math.round((served / Math.max(run.timeline.length, 1)) * 100);
   const selectedSequence = run.flow?.seq ?? mismatchAt;
 
@@ -458,6 +478,7 @@ export function Dashboard() {
     (name: string) => {
       setSelected(name);
       setNotice(null);
+      setRun(emptyRun());
       void loadRun(name);
     },
     [loadRun],
@@ -465,10 +486,12 @@ export function Dashboard() {
 
   const selectFlow = useCallback(
     async (sequence: number) => {
+      const request = ++runRequest.current;
       const [flow, explain] = await Promise.all([
         optional(loadFlow(selected, sequence)),
         optional(loadExplain(selected, sequence)),
       ]);
+      if (request !== runRequest.current) return;
       setRun((current) => ({
         ...current,
         flow: flow ?? current.flow,
@@ -606,7 +629,7 @@ export function Dashboard() {
           </span>
         </div>
         {hybrid && <HybridSummary result={hybrid} />}
-        {!hybrid && mismatchAt !== null && (
+        {!hybrid && hasMismatch && (
           <BehaviorBanner
             mismatchAt={mismatchAt}
             onViewDiff={() => setModal("diff")}
@@ -626,8 +649,10 @@ export function Dashboard() {
               {/* "stopped" only makes sense when the replay actually stopped;
                   a clean run reached the end of the cassette. */}
               <span>
-                {mismatchAt === null
+                {!hasMismatch
                   ? "completed the cassette"
+                  : mismatchAt === null
+                    ? "stopped on an unmatched request"
                   : `stopped ${
                       run.timeline[mismatchAt - 1]?.t_rel.toFixed(1) ?? "0.0"
                     }s in`}
@@ -679,7 +704,11 @@ export function Dashboard() {
               <div className="mismatch-callout">
                 <span>
                   <AlertTriangle size={14} />
-                  Match key changed
+                  {run.explain
+                    ? "Match key changed"
+                    : run.mismatch
+                      ? "No recorded candidate"
+                      : "No mismatch selected"}
                 </span>
                 <code>
                   {run.explain?.match_key.slice(0, 12) ?? "unavailable"}…

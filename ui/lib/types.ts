@@ -17,7 +17,7 @@ export type TimelineEvent = {
   kind: string;
   scope: string;
   key: string;
-  duration_seconds: number;
+  duration_seconds: number | null;
   stream_chunk_count: number;
   metrics?: {
     model?: string;

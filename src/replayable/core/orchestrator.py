@@ -30,9 +30,7 @@ from replayable.core import container as container_core
 from replayable.core import docker as docker_core
 from replayable.core import proxy as proxy_core
 from replayable.core.policy import (
-    ENFORCED_MODES,
     PolicyError,
-    PolicyMode,
     build_policy_manifest,
     load_policy,
     require_enforceable,
@@ -199,12 +197,33 @@ def _remove_stale_replay_artifacts(out: Path) -> None:
         REPLAY_REPORT_FILE_NAME,
         REPLAY_STATE_FILE_NAME,
         LAST_REPLAY_FILE_NAME,
+        FORK_REPORT_FILE_NAME,
+        FORK_STATE_FILE_NAME,
+        FORK_RESULT_FILE_NAME,
         REPLAY_STDOUT_FILE_NAME,
         REPLAY_STDERR_FILE_NAME,
         REPLAY_LOG_FILE_NAME,
         REPLAY_PROXY_LOG_FILE_NAME,
+        FORK_STDOUT_FILE_NAME,
+        FORK_STDERR_FILE_NAME,
+        FORK_LOG_FILE_NAME,
+        FORK_PROXY_LOG_FILE_NAME,
     ):
         (out / stale).unlink(missing_ok=True)
+
+
+def _invalidate_replay_verdicts(cassette: Path) -> None:
+    """Remove every artifact that could be mistaken for this run's verdict."""
+
+    for stale in (
+        LAST_REPLAY_FILE_NAME,
+        FORK_RESULT_FILE_NAME,
+        REPLAY_REPORT_FILE_NAME,
+        REPLAY_STATE_FILE_NAME,
+        FORK_REPORT_FILE_NAME,
+        FORK_STATE_FILE_NAME,
+    ):
+        (cassette / stale).unlink(missing_ok=True)
 
 
 def _validate_network_events(
@@ -429,12 +448,12 @@ def replay_run(
         raise HarnessError(
             f"cassette directory not found at {cassette}; check --cassette"
         )
-    # Drop the previous run's verdict before anything can fail. `check_replay.py`
-    # reads last-replay.json first, so leaving one behind means a replay that
-    # raises — an unreadable manifest, a missing image, a dead proxy — is
-    # reported in CI with the *previous* run's exit code. That is a false green,
-    # and it is reachable from a restored cassette cache as well as a rerun.
-    (cassette / LAST_REPLAY_FILE_NAME).unlink(missing_ok=True)
+    # Drop every previous verdict before anything can fail. `check_replay.py`
+    # reads last-replay.json first and then falls back to fork-result.json, so
+    # clearing only one still lets a failed fork report an older run as green.
+    # The reports and states are part of the same result: retaining one would
+    # also make the dashboard describe a previous attempt as the latest one.
+    _invalidate_replay_verdicts(cassette)
     listen_host = context.proxy_listen_host()
     port = context.resolve_port(port, listen_host)
     try:
@@ -446,20 +465,7 @@ def replay_run(
             # A cassette recorded by an older build could pin a mode this replay
             # engine does not honour. Serving it as `freeze` anyway would make
             # the run silently disagree with its own manifest.
-            unenforced = sorted(
-                {
-                    resolution.mode.value
-                    for resolution in pinned_policy[1]
-                    if isinstance(resolution.mode, PolicyMode)
-                    and resolution.mode not in ENFORCED_MODES
-                }
-            )
-            if unenforced:
-                raise PolicyError(
-                    "manifest pins policy mode(s) "
-                    + ", ".join(unenforced)
-                    + " that the replay engine does not enforce"
-                )
+            require_enforceable(pinned_policy[0])
         declared_flow_count = manifest.get("flow_count")
         if (
             isinstance(declared_flow_count, bool)

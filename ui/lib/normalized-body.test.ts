@@ -84,11 +84,12 @@ describe("diffPanes", () => {
     expect(panes.live).toBe(RAW_BODY);
   });
 
-  it("falls back safely when the explain route is unavailable", () => {
+  it("shows an unmatched live request when no recorded candidate exists", () => {
     const panes = diffPanes(flow, mismatch, null);
 
     expect(panes.normalized).toBe(false);
-    expect(panes.recorded).toBe(panes.live);
+    expect(panes.recorded).toBe("No recorded request is available.");
+    expect(panes.live).toContain("verbose");
   });
 
   it("survives an empty cassette selection", () => {

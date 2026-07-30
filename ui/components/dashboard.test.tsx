@@ -7,8 +7,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "./dashboard";
-import { demoRun } from "@/lib/demo";
-import { eventState, hybridTimeline } from "./timeline";
+import { demoCassettes, demoRun } from "@/lib/demo";
+import { eventState, hybridTimeline, Timeline } from "./timeline";
 import { TokenDiff } from "./token-diff";
 
 afterEach(() => {
@@ -46,6 +46,21 @@ describe("timeline state", () => {
     const events = hybridTimeline(demoRun.timeline, 3, []);
 
     expect(events.map((event) => event.seq)).toEqual([1, 2, 3]);
+  });
+
+  it("renders forward-compatible events without a duration", () => {
+    render(
+      <Timeline
+        events={[{ ...demoRun.timeline[0], duration_seconds: null }]}
+        mismatchAt={null}
+        onSelect={vi.fn()}
+        selected={null}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Flow 1/ })).toHaveTextContent(
+      "duration unavailable",
+    );
   });
 });
 
@@ -207,6 +222,122 @@ describe("Dashboard", () => {
     );
     expect(screen.queryByText("Behavior changed")).not.toBeInTheDocument();
     expect(screen.getByText("0 FLOWS")).toBeInTheDocument();
+  });
+
+  it("shows an empty-cassette mismatch even without a nearest candidate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      apiFetch({
+        "/api/cassettes/research-agent/timeline": { events: [] },
+        "/api/cassettes/research-agent/mismatch": {
+          live_request: {
+            method: "POST",
+            host: "api.anthropic.com",
+            path: "/v1/messages",
+            canonical_body: '{"system":"unrecorded"}',
+          },
+          nearest_candidates: [],
+          diff: "",
+        },
+      }),
+    );
+    render(<Dashboard />);
+
+    expect(await screen.findByText("Behavior changed")).toBeInTheDocument();
+    expect(screen.getAllByText("no recorded candidate").length).toBeGreaterThan(0);
+    expect(screen.getByText("0/0 served")).toBeInTheDocument();
+    expect(screen.getByTestId("added-pane")).toHaveTextContent("unrecorded");
+  });
+
+  it("does not let a slower prior cassette overwrite the current selection", async () => {
+    let resolveResearchTimeline!: (value: {
+      ok: boolean;
+      status: number;
+      json: () => Promise<{ events: unknown[] }>;
+    }) => void;
+    const researchTimeline = new Promise<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<{ events: unknown[] }>;
+    }>((resolve) => {
+      resolveResearchTimeline = resolve;
+    });
+    const event = (key: string) => ({
+      seq: 1,
+      lamport: 1,
+      t_rel: 0.1,
+      channel: "network",
+      kind: "http.exchange",
+      scope: "example.test",
+      key,
+      duration_seconds: 0.1,
+      stream_chunk_count: 0,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) => {
+        if (path === "/api/cassettes") {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              cassettes: [
+                demoCassettes[0],
+                demoCassettes[1],
+              ],
+            }),
+          };
+        }
+        if (path === "/api/cassettes/research-agent/timeline") {
+          return researchTimeline;
+        }
+        if (path === "/api/cassettes/support-triage/timeline") {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ events: [event("GET support.example.test/ticket")] }),
+          };
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ error: "not found" }),
+        };
+      }),
+    );
+    render(<Dashboard />);
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/cassettes/research-agent/timeline",
+        undefined,
+      ),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Support Triage/ }),
+    );
+    expect(
+      await screen.findByText("GET support.example.test/ticket"),
+    ).toBeInTheDocument();
+
+    resolveResearchTimeline({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        events: [event("GET stale-research.example.test/result")],
+      }),
+    });
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/cassettes/research-agent/mismatch",
+        undefined,
+      ),
+    );
+    expect(screen.getByText("GET support.example.test/ticket")).toBeInTheDocument();
+    expect(
+      screen.queryByText("GET stale-research.example.test/result"),
+    ).not.toBeInTheDocument();
   });
 
   it("sends the current strict-mode value when replay is requested", async () => {

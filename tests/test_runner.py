@@ -20,6 +20,7 @@ from replayable.core.docker import (
 from replayable.core.policy import (
     PolicyConfig,
     PolicyMode,
+    ScopeRule,
     build_policy_manifest,
     resolve_policy,
 )
@@ -643,17 +644,25 @@ def test_replay_refuses_tampered_policy_before_runtime(tmp_path):
 
 
 def test_replay_clears_the_previous_verdict_before_it_can_fail(tmp_path, ca_file):
-    """A stale ``last-replay.json`` must never survive into the next verdict.
+    """No stale replay or fork verdict may survive into the next attempt.
 
-    ``scripts/check_replay.py`` reads ``last-replay.json`` first, so a replay
-    that raises before writing one would otherwise be reported in CI with the
-    *previous* run's exit code — a false green.
+    ``scripts/check_replay.py`` reads ``last-replay.json`` first and then falls
+    back to ``fork-result.json``. Clearing only one still lets a replay that
+    raises before writing a new verdict report the previous run as green.
     """
 
     cassette = tmp_path / "cassette"
     CassetteWriter(cassette).initialize(stub_manifest())
-    stale = cassette / "last-replay.json"
-    stale.write_text(json.dumps({"exit_code": 0}), encoding="utf-8")
+    stale_artifacts = (
+        "last-replay.json",
+        "fork-result.json",
+        "replay-report.json",
+        "replay-state.json",
+        "fork-report.json",
+        "fork-state.json",
+    )
+    for name in stale_artifacts:
+        (cassette / name).write_text(json.dumps({"exit_code": 0}), encoding="utf-8")
 
     def explode(**_kwargs):
         raise HarnessError("container could not start")
@@ -667,17 +676,18 @@ def test_replay_clears_the_previous_verdict_before_it_can_fail(tmp_path, ca_file
     with pytest.raises(HarnessError):
         replay_run(cassette=cassette, ca_path=ca_file, context=context)
 
-    assert not stale.exists()
+    assert not any((cassette / name).exists() for name in stale_artifacts)
 
     # ...including a failure raised before the cassette is even readable, which
     # is what a restored-from-cache or hand-edited bundle looks like.
-    stale.write_text(json.dumps({"exit_code": 0}), encoding="utf-8")
+    for name in stale_artifacts:
+        (cassette / name).write_text(json.dumps({"exit_code": 0}), encoding="utf-8")
     (cassette / "manifest.json").write_text("{not json", encoding="utf-8")
 
     with pytest.raises(HarnessError, match="cannot be replayed"):
         replay_run(cassette=cassette, ca_path=ca_file, context=context)
 
-    assert not stale.exists()
+    assert not any((cassette / name).exists() for name in stale_artifacts)
 
 
 def test_fork_does_not_leave_a_previous_offline_verdict_behind(
@@ -702,6 +712,8 @@ def test_fork_does_not_leave_a_previous_offline_verdict_behind(
     )
     stale = cassette / "last-replay.json"
     stale.write_text(json.dumps({"exit_code": 0}), encoding="utf-8")
+    stale_report = cassette / "replay-report.json"
+    stale_report.write_text(json.dumps({"old": "mismatch"}), encoding="utf-8")
 
     context = RunContext(
         proxy_process=proxy_stub(
@@ -727,6 +739,7 @@ def test_fork_does_not_leave_a_previous_offline_verdict_behind(
 
     assert (cassette / "fork-result.json").is_file()
     assert not stale.exists()
+    assert not stale_report.exists()
 
 
 def test_record_refuses_a_policy_mode_replay_will_not_enforce(
@@ -757,21 +770,62 @@ def test_record_refuses_a_policy_mode_replay_will_not_enforce(
         )
 
 
-def test_replay_refuses_a_pinned_policy_mode_it_cannot_honour(tmp_path):
-    """An older cassette pinning `passthrough` must not silently replay frozen."""
+@pytest.mark.parametrize(
+    "config,include_resolution",
+    [
+        (
+            PolicyConfig(
+                channel_defaults=((EventChannel.NETWORK, PolicyMode.PASSTHROUGH),)
+            ),
+            True,
+        ),
+        (
+            # An empty cassette has no resolved scopes. Replay still has to
+            # reject the unenforced default pinned in the config itself.
+            PolicyConfig(
+                channel_defaults=((EventChannel.NETWORK, PolicyMode.PASSTHROUGH),)
+            ),
+            False,
+        ),
+        (
+            # Unused rules are pinned semantics too; checking only resolved
+            # scopes silently accepted this configuration.
+            PolicyConfig(
+                channel_defaults=((EventChannel.NETWORK, PolicyMode.FREEZE),),
+                scope_rules=(
+                    ScopeRule(
+                        EventChannel.NETWORK,
+                        "*.example.test",
+                        PolicyMode.STRICT_OFFLINE,
+                    ),
+                ),
+            ),
+            False,
+        ),
+    ],
+)
+def test_replay_refuses_a_pinned_policy_mode_it_cannot_honour(
+    tmp_path, config, include_resolution
+):
+    """An older cassette pinning an unenforced mode must not replay frozen."""
 
-    config = PolicyConfig(
-        channel_defaults=((EventChannel.NETWORK, PolicyMode.PASSTHROUGH),)
-    )
     resolutions = (
-        resolve_policy(config, channel=EventChannel.NETWORK, scope="api.example.test"),
+        (
+            resolve_policy(
+                config,
+                channel=EventChannel.NETWORK,
+                scope="api.example.test",
+            ),
+        )
+        if include_resolution
+        else ()
     )
     cassette = tmp_path / "cassette"
     CassetteWriter(cassette).initialize(
         stub_manifest(policy=build_policy_manifest(config, resolutions))
     )
 
-    with pytest.raises(HarnessError, match="does not enforce"):
+    with pytest.raises(HarnessError, match="not enforced"):
         replay_run(cassette=cassette)
 
 

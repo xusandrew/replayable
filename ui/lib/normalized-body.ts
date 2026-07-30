@@ -46,6 +46,16 @@ export function diffPanes(
       normalized: true,
     };
   }
+  if (liveCanonical !== undefined) {
+    // An empty cassette has no recorded candidate to explain, but the live
+    // request is still valuable evidence. Do not replace it with two empty,
+    // apparently identical panes.
+    return {
+      recorded: "No recorded request is available.",
+      live: prettyCanonicalBody(liveCanonical),
+      normalized: false,
+    };
+  }
   // No mismatch to show: display the recorded request on both sides rather
   // than inventing a comparison the API did not provide.
   const raw = flow?.request.body_decoded ?? "";

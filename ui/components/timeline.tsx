@@ -106,7 +106,9 @@ export function Timeline({
                 <span className="event-detail">
                   {eventKind(event)}
                   <span>·</span>
-                  {event.duration_seconds.toFixed(2)}s
+                  {typeof event.duration_seconds === "number"
+                    ? `${event.duration_seconds.toFixed(2)}s`
+                    : "duration unavailable"}
                   {event.metrics?.estimated_cost_usd !== undefined && (
                     <>
                       <span>·</span>$
