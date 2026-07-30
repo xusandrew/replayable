@@ -50,6 +50,21 @@ def test_record_replay_and_missing_flow(
     assert manifest["cassette_version"] == "2.0"
     assert manifest["flow_count"] == 4
     assert manifest["event_count"] == 4
+    assert manifest["policy"]["hash"].startswith("sha256:")
+    assert manifest["policy"]["resolved"] == [
+        {
+            "channel": "network",
+            "scope": "api.github.com",
+            "mode": "freeze",
+            "source": "channel-default",
+        },
+        {
+            "channel": "network",
+            "scope": "httpbin.org",
+            "mode": "freeze",
+            "source": "channel-default",
+        },
+    ]
     assert manifest["image"]["ref"] == "replayable/agent-base:local"
     assert len(records) == 4
     assert len(EventLogReader(cassette).load_events()) == 4
