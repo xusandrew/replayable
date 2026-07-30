@@ -58,11 +58,12 @@ def proxy_stub():
     JSON to paths passed in ``addon_environment``. Tests drive that contract
     directly:
 
-        monkeypatch.setattr(
-            replayable.runner,
-            "proxy_process",
-            proxy_stub(REPLAYABLE_STATE_FILE='{"unconsumed_sequences":[2,3]}\\n'),
+        context = RunContext(
+            proxy_process=proxy_stub(
+                REPLAYABLE_STATE_FILE='{"unconsumed_sequences":[2,3]}\\n'
+            )
         )
+        replay_run(cassette=cassette, context=context)
     """
 
     def build(**writes: str):
