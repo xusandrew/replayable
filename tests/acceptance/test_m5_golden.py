@@ -254,3 +254,36 @@ def test_golden_replay_under_strict_image_identity(tmp_path):
     replay = json.loads((cassette / "last-replay.json").read_text(encoding="utf-8"))
     assert replay["workspace_sha256"] == GOLDEN_WORKSPACE_SHA256
     assert replay["stdout_sha256"] == GOLDEN_STDOUT_SHA256
+
+
+@pytest.mark.e2e
+def test_golden_replay_from_native_v2_event_log(tmp_path):
+    """A materialized v2 event log must not change legacy replay behavior."""
+
+    _requires_docker()
+
+    from replayable.cassette import CassetteReader, CassetteWriter
+    from replayable.cassette.events import EventLogReader, derive_events_from_flows
+    from replayable.runner import default_ca_path, replay_run
+
+    cassette = copy_fixture_cassette(CASSETTE_NAME, tmp_path)
+    flows = CassetteReader(cassette).load_flows().flows
+    writer = CassetteWriter(cassette)
+    events = derive_events_from_flows(flows)
+    for event in events:
+        writer.append_event(event)
+    writer.update_manifest(cassette_version="2.0", event_count=len(events))
+
+    assert len(EventLogReader(cassette).load_events()) == GOLDEN_FLOW_COUNT
+    assert (
+        replay_run(
+            cassette=cassette,
+            strict=True,
+            ca_path=default_ca_path(),
+            allow_image_mismatch=os.environ.get("REPLAYABLE_STRICT_IMAGE") != "1",
+        )
+        == ExitCode.SUCCESS
+    )
+    replay = json.loads((cassette / "last-replay.json").read_text(encoding="utf-8"))
+    assert replay["workspace_sha256"] == GOLDEN_WORKSPACE_SHA256
+    assert replay["stdout_sha256"] == GOLDEN_STDOUT_SHA256

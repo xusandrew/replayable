@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from replayable.cassette import CassetteReader
+from replayable.cassette import CassetteReader, CassetteWriter
+from replayable.cassette.events import EventLogReader, derive_events_from_flows
 from replayable.exit_codes import ExitCode
 from replayable.inspection import inspect_cassette
 from replayable.runner import default_ca_path, record_run, replay_run
@@ -46,10 +47,12 @@ def test_record_replay_and_missing_flow(
     reader = CassetteReader(cassette)
     manifest = reader.load_manifest()
     records = reader.load_flows().flows
-    assert manifest["cassette_version"] == "1.0"
+    assert manifest["cassette_version"] == "2.0"
     assert manifest["flow_count"] == 4
+    assert manifest["event_count"] == 4
     assert manifest["image"]["ref"] == "replayable/agent-base:local"
     assert len(records) == 4
+    assert len(EventLogReader(cassette).load_events()) == 4
     assert [
         (record["key"]["host"], record["key"]["path"]) for record in records
     ] == [
@@ -70,10 +73,21 @@ def test_record_replay_and_missing_flow(
         cassette / "replay-agent.stdout"
     ).read_bytes()
 
+    remaining_records = records[1:]
     (cassette / "flows.jsonl").write_text(
-        "\n".join(json.dumps(record, separators=(",", ":")) for record in records[1:])
+        "\n".join(
+            json.dumps(record, separators=(",", ":")) for record in remaining_records
+        )
         + "\n",
         encoding="utf-8",
+    )
+    writer = CassetteWriter(cassette)
+    writer.event_path.write_text("", encoding="utf-8")
+    for event in derive_events_from_flows(remaining_records):
+        writer.append_event(event)
+    writer.update_manifest(
+        flow_count=len(remaining_records),
+        event_count=len(remaining_records),
     )
     missing_result = replay_run(cassette=cassette, port=available_port())
     assert missing_result == ExitCode.REPLAY_MISMATCH

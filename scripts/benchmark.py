@@ -5,70 +5,24 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 from typing import Any
 
-from replayable.cassette import CassetteReader, sse_chunk_bytes
+from replayable.cassette import CassetteReader
+from replayable.verdict.usage import (
+    CACHE_READ_INPUT_MULTIPLIER,
+    CACHE_WRITE_INPUT_MULTIPLIER,
+    MODEL_PRICES_USD_PER_MILLION,
+    PRICING_SOURCE,
+    PRICING_VERIFIED,
+    extract_usage,
+)
 
-PRICING_SOURCE = "https://docs.anthropic.com/en/docs/about-claude/pricing"
-PRICING_VERIFIED = "2026-07-18"
-MODEL_PRICES = {
-    "claude-haiku-4-5": (1.0, 5.0),
-    "claude-haiku-4-5-20251001": (1.0, 5.0),
-}
-# Anthropic prices prompt-cache writes at 1.25x and cache reads at 0.1x the
-# input rate for the models above.
-CACHE_WRITE_INPUT_MULTIPLIER = 1.25
-CACHE_READ_INPUT_MULTIPLIER = 0.1
-
-
-def _sse_documents(flow: dict[str, Any]) -> list[dict[str, Any]]:
-    documents: list[dict[str, Any]] = []
-    pending = ""
-    for chunk in flow["response"].get("sse_chunks", []):
-        pending += sse_chunk_bytes(chunk).decode("utf-8", errors="replace")
-        while separator := re.search(r"\r?\n\r?\n", pending):
-            event = pending[: separator.start()]
-            pending = pending[separator.end() :]
-            data = "\n".join(
-                line.removesuffix("\r").removeprefix("data:").lstrip()
-                for line in event.splitlines()
-                if line.startswith("data:")
-            )
-            if not data or data == "[DONE]":
-                continue
-            try:
-                document = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(document, dict):
-                documents.append(document)
-    return documents
-
+MODEL_PRICES = MODEL_PRICES_USD_PER_MILLION
 
 def _usage(flow: dict[str, Any]) -> tuple[int, int, int, int]:
-    input_tokens = 0
-    output_tokens = 0
-    cache_write_tokens = 0
-    cache_read_tokens = 0
-    for document in _sse_documents(flow):
-        usage = document.get("usage")
-        if not isinstance(usage, dict):
-            message = document.get("message")
-            usage = message.get("usage") if isinstance(message, dict) else None
-        if isinstance(usage, dict):
-            input_tokens = max(input_tokens, int(usage.get("input_tokens", 0) or 0))
-            output_tokens = max(output_tokens, int(usage.get("output_tokens", 0) or 0))
-            cache_write_tokens = max(
-                cache_write_tokens,
-                int(usage.get("cache_creation_input_tokens", 0) or 0),
-            )
-            cache_read_tokens = max(
-                cache_read_tokens,
-                int(usage.get("cache_read_input_tokens", 0) or 0),
-            )
-    return input_tokens, output_tokens, cache_write_tokens, cache_read_tokens
+    usage = extract_usage(flow)
+    return usage.as_tuple() if usage is not None else (0, 0, 0, 0)
 
 
 def main() -> None:

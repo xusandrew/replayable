@@ -154,7 +154,12 @@ def _event_key(flow: dict[str, Any]) -> tuple[str, str]:
     return host, f"{method} {host}:{port}{path}"
 
 
-def event_from_flow(flow: dict[str, Any], *, lamport: int) -> Event:
+def event_from_flow(
+    flow: dict[str, Any],
+    *,
+    lamport: int,
+    metrics: dict[str, Any] | None = None,
+) -> Event:
     """Derive one network exchange event without mutating the source flow."""
 
     seq = _required_int(flow, "seq", minimum=1)
@@ -178,6 +183,12 @@ def event_from_flow(flow: dict[str, Any], *, lamport: int) -> Event:
     ):
         raise CassetteError(f"flow {seq} timing.completed must be >= timing.started")
     scope, key = _event_key(flow)
+    payload: dict[str, Any] = {
+        "duration_seconds": float(completed - started),
+        "flow": flow,
+    }
+    if metrics is not None:
+        payload["metrics"] = metrics
     return Event(
         seq=seq,
         lamport=lamport,
@@ -186,10 +197,7 @@ def event_from_flow(flow: dict[str, Any], *, lamport: int) -> Event:
         kind=EventKind.HTTP_EXCHANGE,
         scope=scope,
         key=key,
-        payload={
-            "duration_seconds": float(completed - started),
-            "flow": flow,
-        },
+        payload=payload,
     )
 
 

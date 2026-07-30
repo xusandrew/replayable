@@ -11,11 +11,14 @@ import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from replayable import __version__
 
-CASSETTE_VERSION = "1.0"
+if TYPE_CHECKING:
+    from replayable.cassette.events import Event
+
+CASSETTE_VERSION = "2.0"
 SUPPORTED_CASSETTE_MAJOR_VERSIONS = frozenset({1, 2})
 BLOB_THRESHOLD_BYTES = 256 * 1024
 MANIFEST_FILE_NAME = "manifest.json"
@@ -125,6 +128,7 @@ class CassetteWriter:
         self.root = root
         self.manifest_path = root / MANIFEST_FILE_NAME
         self.flow_path = root / FLOW_FILE_NAME
+        self.event_path = root / "events.jsonl"
         self.blob_directory = root / BLOB_DIRECTORY_NAME
 
     def initialize(self, manifest: dict[str, Any]) -> None:
@@ -133,6 +137,7 @@ class CassetteWriter:
             shutil.rmtree(self.blob_directory)
         self.blob_directory.mkdir(parents=True, exist_ok=True)
         self.flow_path.write_text("", encoding="utf-8")
+        self.event_path.write_text("", encoding="utf-8")
         self.write_manifest(manifest)
 
     def write_manifest(self, manifest: dict[str, Any]) -> None:
@@ -176,13 +181,38 @@ class CassetteWriter:
                 raise
         return {"blob": f"{BLOB_DIRECTORY_NAME}/{digest}"}
 
-    def append_flow(self, flow: dict[str, Any]) -> None:
-        """Append and flush one complete JSONL record."""
+    def append_event(self, event: Event) -> None:
+        """Append and durably flush one validated event record."""
+
+        with self.event_path.open("a", encoding="utf-8") as output:
+            output.write(
+                json.dumps(event.as_dict(), separators=(",", ":"), sort_keys=True)
+                + "\n"
+            )
+            output.flush()
+            os.fsync(output.fileno())
+
+    def append_flow(self, flow: dict[str, Any], *, event: Event | None = None) -> None:
+        """Append one flow and its corresponding network event.
+
+        Validate the event before either file changes. A process crash can still
+        interrupt the two physical appends, so completed recordings verify both
+        counts before publishing their final manifest.
+        """
+
+        from replayable.cassette.events import event_from_flow
+
+        paired_event = event or event_from_flow(flow, lamport=flow.get("seq", 0))
+        if paired_event.seq != flow.get("seq"):
+            raise CassetteError("flow and event sequence numbers must match")
+        if paired_event.payload.get("flow") != flow:
+            raise CassetteError("network event payload must contain its exact flow")
 
         with self.flow_path.open("a", encoding="utf-8") as output:
             output.write(json.dumps(flow, separators=(",", ":"), sort_keys=True) + "\n")
             output.flush()
             os.fsync(output.fileno())
+        self.append_event(paired_event)
 
 
 class CassetteReader:
@@ -295,6 +325,7 @@ def base_manifest(
         "env_fingerprint": environment_fingerprint,
         "redaction": {"headers": DEFAULT_REDACTED_HEADERS},
         "flow_count": 0,
+        "event_count": 0,
     }
     if ruleset_version is not None:
         manifest["ruleset_version"] = ruleset_version

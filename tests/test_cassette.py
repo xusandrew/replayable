@@ -18,6 +18,7 @@ from replayable.cassette import (
     sha256_bytes,
     sse_chunk_bytes,
 )
+from replayable.cassette.events import EventLogReader
 
 
 def manifest() -> dict:
@@ -59,6 +60,9 @@ def test_bundle_round_trip_preserves_flow_structures(tmp_path):
     reader = CassetteReader(tmp_path)
     assert reader.load_manifest()["flow_count"] == 1
     assert reader.load_flows().flows == [flow]
+    assert [event.payload["flow"] for event in EventLogReader(tmp_path).load_events()] == [
+        flow
+    ]
     assert reader.read_body(request_body) == b'{"prompt":"hello"}'
     assert reader.read_body(response_body) == b"\x00binary\xff"
 
@@ -82,7 +86,7 @@ def test_blob_spill_threshold_binary_spill_and_deduplication(tmp_path):
 def test_truncated_final_jsonl_line_is_detected_and_dropped(tmp_path):
     writer = CassetteWriter(tmp_path)
     writer.initialize(manifest())
-    writer.append_flow({"seq": 1})
+    (tmp_path / "flows.jsonl").write_text('{"seq":1}\n', encoding="utf-8")
     with (tmp_path / "flows.jsonl").open("ab") as output:
         output.write(b'{"seq":2')
 
@@ -111,12 +115,12 @@ def test_major_version_mismatch_is_rejected(tmp_path):
         CassetteReader(tmp_path).load_manifest()
 
 
-def test_v2_manifest_is_accepted_for_event_log_compatibility(tmp_path):
+def test_v1_manifest_remains_accepted_for_legacy_cassettes(tmp_path):
     compatible = manifest()
-    compatible["cassette_version"] = "2.0"
+    compatible["cassette_version"] = "1.0"
     CassetteWriter(tmp_path).initialize(compatible)
 
-    assert CassetteReader(tmp_path).load_manifest()["cassette_version"] == "2.0"
+    assert CassetteReader(tmp_path).load_manifest()["cassette_version"] == "1.0"
 
 
 def test_invalid_version_string_is_rejected(tmp_path):
@@ -159,11 +163,13 @@ def test_reinitialize_removes_stale_blobs(tmp_path):
     writer = CassetteWriter(tmp_path)
     writer.initialize(manifest())
     writer.represent_body(b"\xff")
+    (tmp_path / "events.jsonl").write_text("stale\n", encoding="utf-8")
     assert any((tmp_path / "blobs").iterdir())
 
     writer.initialize(manifest())
 
     assert not any((tmp_path / "blobs").iterdir())
+    assert (tmp_path / "events.jsonl").read_text(encoding="utf-8") == ""
 
 
 def test_blank_lines_are_ignored_but_non_object_flows_are_rejected(tmp_path):
