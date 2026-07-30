@@ -416,8 +416,25 @@ describe("Dashboard", () => {
     );
     render(<Dashboard />);
 
-    expect(await screen.findByText("No mismatch selected")).toBeInTheDocument();
+    // A pass must read as a pass. It is neither a changed match key nor an
+    // absence of information.
+    expect(
+      await screen.findByText("Request matched the recording"),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Match key changed")).not.toBeInTheDocument();
+    expect(screen.queryByText("No mismatch selected")).not.toBeInTheDocument();
+    expect(document.querySelector(".mismatch-callout.matched")).not.toBeNull();
+
+    // The harness never captured a replay request body — the matcher only
+    // proved the normalized keys matched. Showing the recorded bytes under a
+    // "Replay request" label would assert something never observed.
+    expect(screen.queryByTestId("added-pane")).not.toBeInTheDocument();
+    expect(screen.getByTestId("removed-pane")).toHaveTextContent("unchanged");
+    expect(
+      screen.getByText("Recorded request — served on replay"),
+    ).toBeInTheDocument();
+    // Nothing is highlighted, so the removed/added legend would be noise.
+    expect(screen.queryByText("replay only")).not.toBeInTheDocument();
   });
 
   it("renders a timeline event whose cost metric is null", async () => {

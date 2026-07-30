@@ -488,6 +488,9 @@ export function Dashboard() {
   const changed = panes.normalized
     ? changedFields(panes.recorded, panes.live)
     : [];
+  // No mismatch report means the matcher served this flow: a pass, not an
+  // absence of information.
+  const matched = !hasMismatch;
 
   const selectCassette = useCallback(
     (name: string) => {
@@ -675,7 +678,7 @@ export function Dashboard() {
                     }s in`}
               </span>
             </div>
-            <div className="progress-track">
+            <div className={`progress-track ${matched ? "matched" : ""}`}>
               <i style={{ width: `${progress}%` }} />
             </div>
           </section>
@@ -718,11 +721,14 @@ export function Dashboard() {
                 </span>
                 <b>FLOW {selectedSequence ?? "—"}</b>
               </div>
-              <div className="mismatch-callout">
+              {/* A run with no mismatch is a *pass*. Alert-red styling and a
+                  warning triangle would invert the demo's whole signal in the
+                  one panel that explains the matcher's decision. */}
+              <div className={`mismatch-callout ${matched ? "matched" : ""}`}>
                 <span>
-                  <AlertTriangle size={14} />
-                  {!run.mismatch
-                    ? "No mismatch selected"
+                  {matched ? <Check size={14} /> : <AlertTriangle size={14} />}
+                  {matched
+                    ? "Request matched the recording"
                     : run.explain
                       ? "Match key changed"
                       : run.flow
@@ -735,20 +741,29 @@ export function Dashboard() {
                   {run.explain?.match_key.slice(0, 12) ?? "unavailable"}…
                 </code>
               </div>
+              {/* On a pass the harness never captured a replay request body —
+                  the matcher only proved the normalized keys were equal. Show
+                  the recorded request once instead of labelling recorded bytes
+                  "Replay request". */}
               <TokenDiff
                 comparable={panes.comparable ?? true}
                 live={panes.live}
                 normalized={panes.normalized}
                 recorded={panes.recorded}
+                single={matched}
               />
               <NormalizationPanel changed={changed} explain={run.explain} />
               <div className="diff-footer">
-                <span>
-                  <i className="legend removed" /> recorded only
-                </span>
-                <span>
-                  <i className="legend added" /> replay only
-                </span>
+                {!matched && (
+                  <>
+                    <span>
+                      <i className="legend removed" /> recorded only
+                    </span>
+                    <span>
+                      <i className="legend added" /> replay only
+                    </span>
+                  </>
+                )}
                 <button className="text-button" type="button">
                   Inspect raw request
                   <ArrowRight size={13} />

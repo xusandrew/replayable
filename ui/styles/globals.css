@@ -685,10 +685,16 @@ button {
   overflow: hidden;
 }
 
+/* Red is the "replay stopped here" signal. A run that served every flow is a
+   pass and must not be drawn in the failure colour. */
 .progress-track i {
   background: var(--red);
   display: block;
   height: 100%;
+}
+
+.progress-track.matched i {
+  background: var(--mint);
 }
 
 .workspace-grid {
@@ -1201,6 +1207,17 @@ button {
   padding: 0 13px;
 }
 
+/* Green path: the matcher served this flow. Same layout, no alarm. */
+.mismatch-callout.matched {
+  background: #101b16;
+  border-bottom-color: #26372f;
+  color: var(--mint);
+}
+
+.mismatch-callout.matched code {
+  color: #4f7a66;
+}
+
 .mismatch-callout span {
   align-items: center;
   display: flex;
@@ -1217,6 +1234,11 @@ button {
   flex: 1;
   grid-template-columns: 1fr 1fr;
   min-height: 0;
+}
+
+/* A matched replay has one request to show, not a two-sided comparison. */
+.diff-grid.single {
+  grid-template-columns: 1fr;
 }
 
 /* Spans both columns so the caveat sits above the panes it describes. */
@@ -1278,6 +1300,11 @@ button {
   tab-size: 2;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.code-pane-empty {
+  color: var(--subtle);
+  font-style: italic;
 }
 
 .token-removed {
