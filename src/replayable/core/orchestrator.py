@@ -24,6 +24,7 @@ from replayable.cassette import (
     base_manifest,
     env_fingerprint,
 )
+from replayable.cassette.events import Event, EventKind, EventLogReader
 from replayable.core import ca as ca_core
 from replayable.core import container as container_core
 from replayable.core import docker as docker_core
@@ -174,6 +175,21 @@ def _remove_stale_replay_artifacts(out: Path) -> None:
         REPLAY_PROXY_LOG_FILE_NAME,
     ):
         (out / stale).unlink(missing_ok=True)
+
+
+def _validate_network_events(
+    events: list[Event],
+    flows: list[dict[str, Any]],
+) -> None:
+    event_flows = [
+        event.payload.get("flow")
+        for event in events
+        if event.kind is EventKind.HTTP_EXCHANGE
+    ]
+    if event_flows != flows:
+        raise CassetteError(
+            "network events do not correspond exactly to the recorded flows"
+        )
 
 
 def record_run(
@@ -329,8 +345,11 @@ def record_run(
 
     try:
         loaded = CassetteReader(out).load_flows()
+        events = EventLogReader(out).load_events()
+        _validate_network_events(events, loaded.flows)
         writer.update_manifest(
             flow_count=len(loaded.flows),
+            event_count=len(events),
             record_wall_time_seconds=wall_time,
             workspace_sha256=workspace_snapshot.sha256,
             stdout_sha256=_sha256_path(out / AGENT_STDOUT_FILE_NAME),
@@ -365,7 +384,28 @@ def replay_run(
     try:
         reader = CassetteReader(cassette)
         manifest = reader.load_manifest()
-        reader.load_flows()
+        loaded = reader.load_flows()
+        declared_flow_count = manifest.get("flow_count")
+        if (
+            isinstance(declared_flow_count, bool)
+            or not isinstance(declared_flow_count, int)
+            or declared_flow_count != len(loaded.flows)
+        ):
+            raise CassetteError(
+                "manifest flow_count does not match the number of recorded flows"
+            )
+        if manifest["cassette_version"].split(".", maxsplit=1)[0] == "2":
+            events = EventLogReader(cassette).load_events()
+            declared_event_count = manifest.get("event_count")
+            if (
+                isinstance(declared_event_count, bool)
+                or not isinstance(declared_event_count, int)
+                or declared_event_count != len(events)
+            ):
+                raise CassetteError(
+                    "manifest event_count does not match the native event log"
+                )
+            _validate_network_events(events, loaded.flows)
         image_ref = manifest["image"]["ref"]
         image_digest = manifest["image"]["digest"]
         image_id = manifest["image"].get("id", image_digest)

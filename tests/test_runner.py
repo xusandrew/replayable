@@ -431,6 +431,16 @@ def test_replay_refuses_ruleset_version_mismatch(tmp_path):
         replay_run(cassette=cassette)
 
 
+def test_replay_refuses_v2_event_count_mismatch(tmp_path):
+    cassette = tmp_path / "cassette"
+    writer = CassetteWriter(cassette)
+    writer.initialize(stub_manifest())
+    writer.update_manifest(event_count=1)
+
+    with pytest.raises(HarnessError, match="event_count"):
+        replay_run(cassette=cassette)
+
+
 def test_record_pins_project_rules_in_cassette_manifest(monkeypatch, tmp_path, ca_file):
     rules_path = tmp_path / "replayable.toml"
     rules_path.write_text(

@@ -17,6 +17,7 @@ from replayable.addons.replay_addon import (
     _pin_leaf_certificate_validity,
 )
 from replayable.cassette import CassetteReader, CassetteWriter, base_manifest
+from replayable.cassette.events import EventLogReader
 
 
 def initialize_cassette(path) -> None:
@@ -98,6 +99,52 @@ def test_record_addon_writes_m2_schema_and_redacts_before_hashing(tmp_path):
     assert record["response"]["body_sha256"] == hashlib.sha256(response_body).hexdigest()
     assert reader.read_body(record["response"]["body"]) == response_body
     assert "real-token" not in (tmp_path / "flows.jsonl").read_text(encoding="utf-8")
+    (event,) = EventLogReader(tmp_path).load_events()
+    assert event.payload["flow"] == record
+    assert event.payload["duration_seconds"] >= 0
+    assert "real-token" not in (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+
+
+def test_record_addon_enriches_anthropic_event_with_usage_and_cost(tmp_path):
+    initialize_cassette(tmp_path)
+    recorder = RecordAddon(tmp_path, {})
+    flow = make_flow(
+        "POST",
+        "https://api.anthropic.com/v1/messages",
+        request_body=b'{"model":"claude-haiku-4-5"}',
+        response_body=b"",
+        content_type="text/event-stream",
+    )
+    recorder.responseheaders(flow)
+    stream = flow.response.stream
+    assert isinstance(stream, Callable)
+    chunks = [
+        (
+            b'event: message_start\r\ndata: {"type":"message_start",'
+            b'"message":{"usage":{"input_tokens":100,"output_tokens":1}}}\r'
+        ),
+        (
+            b'\n\r\nevent: message_delta\r\ndata: {"type":"message_delta",'
+            b'"usage":{"output_tokens":25}}\r\n\r\n'
+        ),
+    ]
+    for chunk in chunks:
+        stream(chunk)
+
+    recorder.response(flow)
+
+    (event,) = EventLogReader(tmp_path).load_events()
+    assert event.payload["metrics"] == {
+        "model": "claude-haiku-4-5",
+        "usage_available": True,
+        "tokens": {
+            "input": 100,
+            "output": 25,
+            "cache_write": 0,
+            "cache_read": 0,
+        },
+        "estimated_cost_usd": 0.000225,
+    }
 
 
 def test_replay_addon_serves_duplicate_requests_fifo_byte_identically(tmp_path):

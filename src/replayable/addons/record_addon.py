@@ -18,7 +18,9 @@ from replayable.cassette import (
     CassetteWriter,
     sha256_bytes,
 )
+from replayable.cassette.events import event_from_flow
 from replayable.redact import redact_body, redact_headers
+from replayable.verdict.usage import estimate_cost_usd, extract_usage
 
 
 def _environment_path(name: str) -> Path:
@@ -148,7 +150,32 @@ class RecordAddon:
                 "completed": max(0.0, completed_at - self._t0()),
             },
         }
-        writer.append_flow(record)
+        metrics: dict[str, Any] | None = None
+        if (
+            record["key"]["host"] == "api.anthropic.com"
+            and record["key"]["path"] == "/v1/messages"
+        ):
+            try:
+                request_document = json.loads(request_body)
+            except json.JSONDecodeError:
+                request_document = {}
+            model = (
+                str(request_document.get("model", ""))
+                if isinstance(request_document, dict)
+                else ""
+            )
+            usage = extract_usage(record, response_body=response_body)
+            metrics = {
+                "model": model,
+                "usage_available": usage is not None,
+            }
+            if usage is not None:
+                metrics["tokens"] = usage.as_dict()
+                estimated_cost = estimate_cost_usd(model, usage)
+                if estimated_cost is not None:
+                    metrics["estimated_cost_usd"] = estimated_cost
+        event = event_from_flow(record, lamport=self.sequence, metrics=metrics)
+        writer.append_flow(record, event=event)
 
 
 def _redact_sse_chunks(
