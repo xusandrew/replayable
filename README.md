@@ -887,34 +887,12 @@ replayable inspect --cassette CASSETTE_DIR [--flow N]
 replayable inspect [--cassette CASSETTE_DIR] --explain-match REQUEST_JSON
 ```
 
-### Dashboard API
-
-```sh
-uv run replayable ui --cassette-root ./cassettes
-```
-
-The dashboard binds only to `127.0.0.1` and serves its API and packaged static
-assets from one Python process. Read routes expose cassette summaries,
-timelines, flow details, normalization explanations, mismatch/observation/diff
-artifacts, and fork results. Start with `--allow-write` to enable JSON POST
-actions for replay, fork, and recording a fresh named baseline:
-
-```sh
-uv run replayable ui --cassette-root ./cassettes --allow-write
-```
-
-Write actions reject non-JSON requests, cross-origin callers, non-loopback Host
-headers, path traversal, concurrent mutations, and in-place baseline
-replacement. A fresh baseline is recorded in hidden staging and published only
-after a successful run.
-
 Run any command with `--help` for the generated Typer documentation:
 
 ```sh
 uv run replayable record --help
 uv run replayable replay --help
 uv run replayable inspect --help
-uv run replayable ui --help
 ```
 
 
