@@ -31,6 +31,9 @@ test("shows a real cassette mismatch as the offline Screen A dashboard", async (
       }),
     });
   });
+  // `canonical_body` is what `normalize_request()` produces: compact,
+  // key-sorted, sentinel-substituted. Pretty-printing it here would let the
+  // panel diff a canonical body against a raw one and still look green.
   await page.route("**/api/cassettes/research-agent/mismatch", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -39,19 +42,31 @@ test("shows a real cassette mismatch as the offline Screen A dashboard", async (
           method: "POST",
           host: "api.anthropic.com",
           path: "/v1/messages",
-          canonical_body: JSON.stringify(
-            {
-              model: "claude-haiku-4-5",
-              system:
-                "You are a verbose research agent. Research the user's topic and prepare a fact-based report.",
-              request_id: "§VOLATILE§",
-            },
-            null,
-            2,
-          ),
+          canonical_body:
+            '{"model":"claude-haiku-4-5","request_id":"§VOLATILE§","system":"You are a verbose research agent."}',
+          match_key: "5903c87f24b6d3dc",
         },
         nearest_candidates: [{ seq: 3 }],
         diff: '- "concise"\n+ "verbose"',
+      }),
+    });
+  });
+  await page.route("**/api/cassettes/research-agent/explain*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        flow: 3,
+        match_key: "5903c87f24b6d3dc",
+        pre_hash: "POST\napi.anthropic.com\n/v1/messages\n\n{}",
+        canonical_body:
+          '{"model":"claude-haiku-4-5","request_id":"§VOLATILE§","system":"You are a concise research agent."}',
+        diff_body: "{}",
+        rules: {
+          version: "sha256:1041e721aabbccdd",
+          field_names: ["request_id", "tool_call_id", "timestamp", "nonce"],
+          value_patterns: [],
+          preserve: [],
+        },
       }),
     });
   });
@@ -104,8 +119,14 @@ test("shows a real cassette mismatch as the offline Screen A dashboard", async (
   await expect(page.getByText("MISMATCH", { exact: true })).toBeVisible();
   await expect(page.getByText("request_id ignored")).toBeVisible();
   await expect(page.getByText("system changed")).toBeVisible();
-  await expect(page.getByText("Recorded request")).toBeVisible();
-  await expect(page.getByText("Replay request")).toBeVisible();
+  await expect(page.getByText("Recorded request (normalized)")).toBeVisible();
+  await expect(page.getByText("Replay request (normalized)")).toBeVisible();
+  // The recorded pane shows the matcher's view, so the real volatile value is
+  // never displayed and only the prompt token is highlighted.
+  await expect(page.getByTestId("removed-pane")).not.toContainText("req_018fa2");
+  await expect(page.getByTestId("removed-pane").locator(".token-removed")).toHaveCount(1);
+  await expect(page.getByTestId("added-pane").locator(".token-added")).toHaveCount(1);
+  await expect(page.getByText("2/20 served")).toBeVisible();
   await page.getByRole("button", { name: "View full diff" }).click();
   await expect(
     page.getByRole("dialog", { name: "Full matcher diff" }),

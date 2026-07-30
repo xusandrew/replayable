@@ -22,6 +22,9 @@ describe("DownstreamCheck", () => {
     expect(screen.getByText("87%")).toBeInTheDocument();
     expect(screen.getByText("Same tool sequence")).toBeInTheDocument();
     expect(screen.getAllByText("MATCH")).toHaveLength(3);
+    // The transcript is the only failing gate in this fixture; it must be shown.
+    expect(screen.getByText("Agent transcript")).toBeInTheDocument();
+    expect(screen.getByText("CHANGED")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Compare full run/ }));
     fireEvent.click(screen.getByRole("button", { name: /Save as new baseline/ }));
@@ -47,7 +50,25 @@ describe("DownstreamCheck", () => {
     );
 
     expect(screen.getByText("BELOW THRESHOLD")).toBeInTheDocument();
-    expect(screen.getAllByText("CHANGED")).toHaveLength(3);
+    expect(screen.getAllByText("CHANGED")).toHaveLength(4);
     expect(screen.getByText("report.md")).toBeInTheDocument();
+  });
+
+  it("states the run's real verdict so a green pill cannot imply a green exit", () => {
+    const result = structuredClone(fixture) as ForkResult;
+    // The gate `replayable` actually exits on is byte-exact equality; the
+    // similarity score is advisory and can pass while the run fails.
+    result.exit_code = 2;
+    result.downstream.matches = false;
+    result.downstream.similarity.passes = true;
+
+    render(
+      <DownstreamCheck onCompare={vi.fn()} onSave={vi.fn()} result={result} />,
+    );
+
+    expect(screen.getByText("WITHIN THRESHOLD")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Run verdict: exit 2 · not byte-identical/),
+    ).toBeInTheDocument();
   });
 });

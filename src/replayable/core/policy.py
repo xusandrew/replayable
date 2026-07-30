@@ -91,6 +91,44 @@ class PolicyConfig:
 
 DEFAULT_POLICY = PolicyConfig(channel_defaults=((EventChannel.NETWORK, PolicyMode.FREEZE),))
 
+# Resolution is fully implemented for all three demo modes, but the replay
+# engine only *enforces* `freeze`: it serves the recorded prefix and reports a
+# mismatch for anything else. `strict-offline` and `passthrough` currently have
+# no distinct behaviour at replay time (a live segment is requested with
+# `--fork-at`, which bypasses policy entirely). Pinning a mode nothing honours
+# into a cassette manifest would be a silent lie about how that cassette
+# replays, so recording refuses it instead.
+ENFORCED_MODES: frozenset[PolicyMode] = frozenset({PolicyMode.FREEZE})
+
+
+def unenforced_modes(config: PolicyConfig) -> tuple[PolicyMode, ...]:
+    """Return the declared modes replay cannot honour yet, in stable order."""
+
+    declared: list[PolicyMode] = [mode for _channel, mode in config.channel_defaults]
+    declared.extend(rule.mode for rule in config.scope_rules)
+    if config.scenario is not None:
+        declared.append(config.scenario)
+    return tuple(
+        sorted(
+            {mode for mode in declared if mode not in ENFORCED_MODES},
+            key=lambda mode: mode.value,
+        )
+    )
+
+
+def require_enforceable(config: PolicyConfig) -> None:
+    """Reject a policy whose declared modes replay would silently ignore."""
+
+    unenforced = unenforced_modes(config)
+    if unenforced:
+        raise PolicyError(
+            "policy mode(s) "
+            + ", ".join(mode.value for mode in unenforced)
+            + " are parsed but not enforced by the replay engine yet; only "
+            + ", ".join(sorted(mode.value for mode in ENFORCED_MODES))
+            + " may be pinned into a cassette"
+        )
+
 
 @dataclass(frozen=True)
 class ResolvedPolicy:

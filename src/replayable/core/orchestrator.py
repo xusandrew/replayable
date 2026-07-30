@@ -30,9 +30,12 @@ from replayable.core import container as container_core
 from replayable.core import docker as docker_core
 from replayable.core import proxy as proxy_core
 from replayable.core.policy import (
+    ENFORCED_MODES,
     PolicyError,
+    PolicyMode,
     build_policy_manifest,
     load_policy,
+    require_enforceable,
     resolve_policy,
     validate_policy_manifest,
 )
@@ -263,6 +266,10 @@ def record_run(
         raise HarnessError(f"secret overrides are invalid: {exc}") from exc
     try:
         policy = load_policy(project_rules_path)
+        # Fail before the container runs, not after: pinning a mode the replay
+        # engine does not honour would make the manifest describe behaviour the
+        # cassette never gets.
+        require_enforceable(policy)
     except PolicyError as exc:
         raise HarnessError(f"policy configuration is invalid: {exc}") from exc
     classified_secret_names = secret_names(
@@ -422,6 +429,12 @@ def replay_run(
         raise HarnessError(
             f"cassette directory not found at {cassette}; check --cassette"
         )
+    # Drop the previous run's verdict before anything can fail. `check_replay.py`
+    # reads last-replay.json first, so leaving one behind means a replay that
+    # raises — an unreadable manifest, a missing image, a dead proxy — is
+    # reported in CI with the *previous* run's exit code. That is a false green,
+    # and it is reachable from a restored cassette cache as well as a rerun.
+    (cassette / LAST_REPLAY_FILE_NAME).unlink(missing_ok=True)
     listen_host = context.proxy_listen_host()
     port = context.resolve_port(port, listen_host)
     try:
@@ -429,6 +442,24 @@ def replay_run(
         manifest = reader.load_manifest()
         loaded = reader.load_flows()
         pinned_policy = validate_policy_manifest(manifest)
+        if pinned_policy is not None:
+            # A cassette recorded by an older build could pin a mode this replay
+            # engine does not honour. Serving it as `freeze` anyway would make
+            # the run silently disagree with its own manifest.
+            unenforced = sorted(
+                {
+                    resolution.mode.value
+                    for resolution in pinned_policy[1]
+                    if isinstance(resolution.mode, PolicyMode)
+                    and resolution.mode not in ENFORCED_MODES
+                }
+            )
+            if unenforced:
+                raise PolicyError(
+                    "manifest pins policy mode(s) "
+                    + ", ".join(unenforced)
+                    + " that the replay engine does not enforce"
+                )
         declared_flow_count = manifest.get("flow_count")
         if (
             isinstance(declared_flow_count, bool)

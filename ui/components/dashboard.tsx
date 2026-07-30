@@ -36,13 +36,12 @@ import {
   runReplay,
 } from "@/lib/api";
 import { demoCassettes, demoRun } from "@/lib/demo";
+import { changedFields, diffPanes } from "@/lib/normalized-body";
 import type {
   CassetteSummary,
   Explain,
-  FlowDetail,
   Mismatch,
   RunData,
-  TimelineEvent,
 } from "@/lib/types";
 import { hybridTimeline, Timeline } from "./timeline";
 import { TokenDiff } from "./token-diff";
@@ -212,10 +211,12 @@ function RunHeader({
 function BehaviorBanner({
   mismatchAt,
   served,
+  total,
   onViewDiff,
 }: {
   mismatchAt: number;
   served: number;
+  total: number;
   onViewDiff: () => void;
 }) {
   return (
@@ -233,7 +234,9 @@ function BehaviorBanner({
       <span className="banner-stats">
         <b>exit 2</b>
         <span>mismatch at flow {mismatchAt}</span>
-        <span>{served}/7 served</span>
+        <span>
+          {served}/{total} served
+        </span>
       </span>
       <button
         className="button banner-button"
@@ -326,7 +329,13 @@ function Modal({
   );
 }
 
-function NormalizationPanel({ explain }: { explain: Explain | null }) {
+function NormalizationPanel({
+  explain,
+  changed,
+}: {
+  explain: Explain | null;
+  changed: string[];
+}) {
   if (!explain) return null;
   const fields = explain.rules.field_names.slice(0, 5);
   return (
@@ -346,10 +355,14 @@ function NormalizationPanel({ explain }: { explain: Explain | null }) {
             {field} ignored
           </span>
         ))}
-        <span className="rule-badge changed">
-          <X size={11} />
-          system changed
-        </span>
+        {/* Derived from the two normalized bodies, so the badge names the field
+            that actually survived normalization and still differs. */}
+        {changed.slice(0, 5).map((field) => (
+          <span className="rule-badge changed" key={field}>
+            <X size={11} />
+            {field} changed
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -359,6 +372,10 @@ export function Dashboard() {
   const [cassettes, setCassettes] = useState<CassetteSummary[]>(demoCassettes);
   const [selected, setSelected] = useState(demoCassettes[0].name);
   const [run, setRun] = useState<RunData>(demoRun);
+  // Everything on screen is fabricated until the local API answers. Saying so
+  // is not optional: the whole point of this dashboard is that the badges
+  // reflect a real matcher decision.
+  const [live, setLive] = useState(false);
   const [strict, setStrict] = useState(true);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -373,7 +390,14 @@ export function Dashboard() {
   const loadRun = useCallback(async (name: string) => {
     const timeline = await optional(loadTimeline(name));
     if (!timeline) {
-      setRun(demoRun);
+      // Never dress a real cassette in another run's fabricated mismatch.
+      setRun({
+        timeline: [],
+        mismatch: null,
+        flow: null,
+        explain: null,
+        forkResult: null,
+      });
       return;
     }
     const [mismatch, forkResult] = await Promise.all([
@@ -402,6 +426,7 @@ export function Dashboard() {
     listCassettes()
       .then((items) => {
         if (!active || items.length === 0) return;
+        setLive(true);
         setCassettes(items);
         setSelected(items[0].name);
         return loadRun(items[0].name);
@@ -423,9 +448,11 @@ export function Dashboard() {
   const progress = Math.round((served / Math.max(run.timeline.length, 1)) * 100);
   const selectedSequence = run.flow?.seq ?? mismatchAt;
 
-  const liveBody =
-    run.mismatch?.live_request.canonical_body ?? run.flow?.request.body_decoded ?? "";
-  const recordedBody = run.flow?.request.body_decoded ?? "";
+  // Both panes must be the matcher's own view of the request; see lib/normalized-body.
+  const panes = diffPanes(run.flow, run.mismatch, run.explain);
+  const changed = panes.normalized
+    ? changedFields(panes.recorded, panes.live)
+    : [];
 
   const selectCassette = useCallback(
     (name: string) => {
@@ -551,6 +578,13 @@ export function Dashboard() {
           setStrict={setStrict}
           strict={strict}
         />
+        {!live && (
+          <div className="notice demo-notice" role="status">
+            <AlertTriangle size={14} />
+            Sample data — the local API is not reachable. Start it with{" "}
+            <code>replayable ui --allow-write</code> to inspect real cassettes.
+          </div>
+        )}
         {notice && (
           <div className="notice" role="status">
             <Activity size={14} />
@@ -568,7 +602,7 @@ export function Dashboard() {
           </span>
           <span>
             <ShieldCheck size={13} />
-            exact image
+            {cassette.image.ref}
           </span>
         </div>
         {hybrid && <HybridSummary result={hybrid} />}
@@ -577,6 +611,7 @@ export function Dashboard() {
             mismatchAt={mismatchAt}
             onViewDiff={() => setModal("diff")}
             served={served}
+            total={run.timeline.length}
           />
         )}
         {!hybrid && (
@@ -588,10 +623,14 @@ export function Dashboard() {
                 </strong>{" "}
                 flows served
               </span>
+              {/* "stopped" only makes sense when the replay actually stopped;
+                  a clean run reached the end of the cassette. */}
               <span>
-                stopped{" "}
-                {run.timeline[mismatchAt ? mismatchAt - 1 : 0]?.t_rel.toFixed(1)}
-                s in
+                {mismatchAt === null
+                  ? "completed the cassette"
+                  : `stopped ${
+                      run.timeline[mismatchAt - 1]?.t_rel.toFixed(1) ?? "0.0"
+                    }s in`}
               </span>
             </div>
             <div className="progress-track">
@@ -646,8 +685,12 @@ export function Dashboard() {
                   {run.explain?.match_key.slice(0, 12) ?? "unavailable"}…
                 </code>
               </div>
-              <TokenDiff live={liveBody} recorded={recordedBody} />
-              <NormalizationPanel explain={run.explain} />
+              <TokenDiff
+                live={panes.live}
+                normalized={panes.normalized}
+                recorded={panes.recorded}
+              />
+              <NormalizationPanel changed={changed} explain={run.explain} />
               <div className="diff-footer">
                 <span>
                   <i className="legend removed" /> recorded only

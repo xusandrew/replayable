@@ -105,7 +105,11 @@ export type ForkResult = {
   downstream: {
     matches: boolean;
     exit_code: { matches: boolean; baseline: number; candidate: number };
-    stdout: { matches: boolean };
+    stdout: {
+      matches: boolean;
+      baseline_sha256: string;
+      candidate_sha256: string;
+    };
     workspace: {
       matches: boolean;
       diff: { added: string[]; removed: string[]; changed: string[] };

@@ -3,6 +3,8 @@
 type TokenDiffProps = {
   recorded: string;
   live: string;
+  /** Both sides are the matcher's normalized view, so the diff is meaningful. */
+  normalized?: boolean;
 };
 
 function tokens(value: string): string[] {
@@ -41,25 +43,26 @@ function CodePane({
   );
 }
 
-export function TokenDiff({ recorded, live }: TokenDiffProps) {
+export function TokenDiff({ recorded, live, normalized = true }: TokenDiffProps) {
   const baseline = tokens(recorded);
   const candidate = tokens(live);
   const baselineChanged = changedTokens(baseline, candidate);
   const candidateChanged = changedTokens(candidate, baseline);
+  const suffix = normalized ? " (normalized)" : "";
 
   return (
     <div className="diff-grid">
       <section className="diff-column">
         <div className="pane-label">
           <span className="pane-dot recorded" />
-          Recorded request
+          Recorded request{suffix}
         </div>
         <CodePane value={baseline} changed={baselineChanged} tone="removed" />
       </section>
       <section className="diff-column">
         <div className="pane-label">
           <span className="pane-dot live" />
-          Replay request
+          Replay request{suffix}
         </div>
         <CodePane value={candidate} changed={candidateChanged} tone="added" />
       </section>

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
+from replayable.exit_codes import ExitCode
 from replayable.verdict.fork_result import ForkResultError, build_fork_result
 from replayable.verdict.observation import ModelSummary, Observation, Transcript
 from replayable.verdict.usage import TokenUsage
@@ -90,3 +94,44 @@ def test_fork_result_rejects_inconsistent_proxy_state(state):
             wall_time_seconds=5.0,
             events=[],
         )
+
+
+def test_dashboard_fixture_matches_the_real_fork_result_shape():
+    """The Playwright fixture must describe the artifact the harness writes.
+
+    Screen B renders straight from ``fork-result.json``. A hand-written
+    fixture that omits fields the real writer always emits lets the dashboard
+    pass its browser tests while crashing — or silently hiding a failed
+    gate — against a genuine hybrid run.
+    """
+
+    fixture = json.loads(
+        (
+            Path(__file__).resolve().parent.parent
+            / "ui"
+            / "e2e"
+            / "fixtures"
+            / "fork-result.json"
+        ).read_text(encoding="utf-8")
+    )
+    real = build_fork_result(
+        baseline=observation(),
+        candidate=observation(stdout_sha256="changed"),
+        live=observation(calls=2, cost=0.0042),
+        state=fork_state(),
+        captured_flow_count=2,
+        wall_time_seconds=5.0,
+        events=[],
+    )
+    real["exit_code"] = int(ExitCode.REPLAY_MISMATCH)
+
+    def shape(value: object) -> object:
+        if isinstance(value, dict):
+            return {key: shape(item) for key, item in sorted(value.items())}
+        if isinstance(value, list):
+            return "[]"
+        return type(value).__name__
+
+    assert shape(fixture["downstream"]) == shape(real["downstream"])
+    assert shape(fixture["segments"]) == shape(real["segments"])
+    assert set(fixture) >= set(real)

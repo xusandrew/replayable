@@ -49,8 +49,97 @@ describe("timeline state", () => {
   });
 });
 
+/**
+ * Responses shaped exactly like the ones `replayable ui` serves.
+ *
+ * `canonical_body` is compact, key-sorted, sentinel-substituted JSON — *not*
+ * the pretty-printed raw request. Fixtures that quietly pretty-print it hide
+ * the very defect this suite is supposed to catch.
+ */
+function apiFetch(overrides: Record<string, unknown> = {}) {
+  const routes: Record<string, unknown> = {
+    "/api/cassettes": {
+      cassettes: [
+        {
+          name: "research-agent",
+          flow_count: 20,
+          created_at: "2026-07-29T08:11:54Z",
+          image: { ref: "replayable/research-agent:local", digest: "sha256:cd398ef53ea7" },
+          status: "mismatch",
+          last_exit_code: 2,
+          has_observation: true,
+          has_fork_result: false,
+        },
+      ],
+    },
+    "/api/cassettes/research-agent/timeline": {
+      events: [1, 2, 3].map((seq) => ({
+        seq,
+        lamport: seq,
+        t_rel: seq * 0.4,
+        channel: "network",
+        kind: "http.exchange",
+        scope: "api.anthropic.com",
+        key: "POST api.anthropic.com:443/v1/messages",
+        duration_seconds: 0.3,
+        stream_chunk_count: 0,
+      })),
+    },
+    "/api/cassettes/research-agent/mismatch": {
+      live_request: {
+        method: "POST",
+        host: "api.anthropic.com",
+        path: "/v1/messages",
+        canonical_body:
+          '{"max_tokens":700,"request_id":"§VOLATILE§","system":"You are a verbose research agent."}',
+        match_key: "5903c87f24b6d3dc",
+      },
+      nearest_candidates: [{ seq: 3 }],
+      diff: '-  "concise"\n+  "verbose"',
+    },
+    "/api/cassettes/research-agent/flows/3": {
+      seq: 3,
+      key: { method: "POST", host: "api.anthropic.com", port: 443, path: "/v1/messages" },
+      request: {
+        query: "",
+        headers: [["content-type", "application/json"]],
+        body_decoded:
+          '{"system":"You are a concise research agent.","request_id":"req_018fa2","max_tokens":700}',
+      },
+      response: { status: 200, headers: [], body_decoded: "" },
+      timing: { started: 0.9, completed: 1.1 },
+    },
+    "/api/cassettes/research-agent/explain?flow=3": {
+      flow: 3,
+      match_key: "5903c87f24b6d3dc",
+      pre_hash: "POST\napi.anthropic.com\n/v1/messages\n\n{}",
+      canonical_body:
+        '{"max_tokens":700,"request_id":"§VOLATILE§","system":"You are a concise research agent."}',
+      diff_body: "{}",
+      rules: {
+        version: "sha256:1041e721aabbccdd",
+        field_names: ["request_id"],
+        value_patterns: [],
+        preserve: [],
+      },
+    },
+  };
+  // An `undefined` override removes the route, so it 404s like a cassette
+  // artifact the server does not have.
+  for (const [path, value] of Object.entries(overrides)) {
+    if (value === undefined) delete routes[path];
+    else routes[path] = value;
+  }
+  return vi.fn(async (path: string) => {
+    if (!(path in routes)) {
+      return { ok: false, status: 404, json: async () => ({ error: "not found" }) };
+    }
+    return { ok: true, status: 200, json: async () => routes[path] };
+  });
+}
+
 describe("Dashboard", () => {
-  it("keeps a reviewable demo state when the local API is unavailable", async () => {
+  it("labels the fabricated fallback when the local API is unavailable", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     render(<Dashboard />);
 
@@ -60,9 +149,64 @@ describe("Dashboard", () => {
     expect(screen.getByText("Behavior changed")).toBeInTheDocument();
     expect(screen.getByText("2/7")).toBeInTheDocument();
     expect(screen.getByText("request_id ignored")).toBeInTheDocument();
+    // Sample data must announce itself; an unlabelled fake baseline is worse
+    // than an empty screen.
+    expect(screen.getByText(/Sample data/)).toBeInTheDocument();
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith("/api/cassettes", undefined),
     );
+  });
+
+  it("diffs the matcher's normalized view of both requests, not raw vs canonical", async () => {
+    vi.stubGlobal("fetch", apiFetch());
+    render(<Dashboard />);
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Sample data/)).not.toBeInTheDocument(),
+    );
+    const recorded = await screen.findByTestId("removed-pane");
+    const live = screen.getByTestId("added-pane");
+
+    // Both panes are normalized: the real request_id never appears, and the
+    // sentinel appears on both sides rather than as a spurious change.
+    expect(recorded).not.toHaveTextContent("req_018fa2");
+    expect(recorded).toHaveTextContent("§VOLATILE§");
+    expect(live).toHaveTextContent("§VOLATILE§");
+    expect(recorded).toHaveTextContent("concise");
+    expect(live).toHaveTextContent("verbose");
+    // Exactly one token differs on each side.
+    expect(recorded.querySelectorAll(".token-removed")).toHaveLength(1);
+    expect(live.querySelectorAll(".token-added")).toHaveLength(1);
+  });
+
+  it("derives the changed badge and the served count from the real run", async () => {
+    vi.stubGlobal("fetch", apiFetch());
+    render(<Dashboard />);
+
+    // The badge names the field that actually differs after normalization.
+    expect(await screen.findByText("system changed")).toBeInTheDocument();
+    expect(screen.queryByText("model changed")).not.toBeInTheDocument();
+    // Three timeline events, mismatch at flow 3 — not a hard-coded 7.
+    expect(screen.getByText("2/3 served")).toBeInTheDocument();
+    // The image chip reports the recorded reference instead of asserting
+    // "exact image" for a run that may have used --allow-image-mismatch.
+    expect(
+      screen.getByText("replayable/research-agent:local"),
+    ).toBeInTheDocument();
+  });
+
+  it("never dresses a real cassette in another run's fabricated mismatch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      apiFetch({ "/api/cassettes/research-agent/timeline": undefined }),
+    );
+    render(<Dashboard />);
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Sample data/)).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Behavior changed")).not.toBeInTheDocument();
+    expect(screen.getByText("0 FLOWS")).toBeInTheDocument();
   });
 
   it("sends the current strict-mode value when replay is requested", async () => {
