@@ -326,8 +326,7 @@ def test_accept_records_to_hidden_staging_then_publishes_new_baseline(tmp_path):
 
     def record(**kwargs):
         observed.update(kwargs)
-        writer = CassetteWriter(kwargs["out"])
-        writer.initialize(stub_manifest())
+        make_cassette(kwargs["out"].parent, kwargs["out"].name)
         return ExitCode.SUCCESS
 
     app = UIApp(
@@ -348,9 +347,39 @@ def test_accept_records_to_hidden_staging_then_publishes_new_baseline(tmp_path):
     assert observed["image"] == "image"
     assert observed["command"] == ["workload"]
     assert observed["env_file"] == Path("/tmp/demo.env")
-    assert observed["out"].name.startswith(".demo-fresh.")
+    assert observed["out"].name.startswith(".demo-fresh.candidate.")
     assert (root / "demo-fresh" / "manifest.json").is_file()
     assert not any(path.name.startswith(".demo-fresh.") for path in root.iterdir())
+
+
+def test_accept_can_atomically_replace_only_the_selected_baseline(tmp_path):
+    root = tmp_path / "cassettes"
+    original = make_cassette(root)
+    old_manifest = (original / "manifest.json").read_bytes()
+
+    def record(**kwargs):
+        make_cassette(kwargs["out"].parent, kwargs["out"].name)
+        writer = CassetteWriter(kwargs["out"])
+        writer.update_manifest(created_at="2026-07-30T12:00:00Z")
+        return ExitCode.SUCCESS
+
+    app = UIApp(
+        root,
+        static_dir=tmp_path,
+        allow_write=True,
+        record_executor=record,
+    )
+    response = app.handle(
+        "POST",
+        "/api/cassettes/demo/accept",
+        headers={"content-type": "application/json", "host": "127.0.0.1"},
+        body=b'{"destination":"demo","replace":true}',
+    )
+
+    assert response.status == 200
+    assert payload(response)["replaced"] is True
+    assert (original / "manifest.json").read_bytes() != old_manifest
+    assert not any(path.name.startswith(".demo.") for path in root.iterdir())
 
 
 def test_http_adapter_binds_loopback_and_preserves_api_errors(tmp_path):

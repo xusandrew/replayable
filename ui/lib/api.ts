@@ -66,6 +66,7 @@ export async function recordFreshBaseline(
   name: string,
   destination: string,
   envFile: string,
+  replace: boolean,
 ): Promise<number> {
   const result = await request<{ exit_code: number }>(
     `/api/cassettes/${encodeURIComponent(name)}/accept`,
@@ -75,6 +76,7 @@ export async function recordFreshBaseline(
       body: JSON.stringify({
         destination,
         env_file: envFile || null,
+        replace,
       }),
     },
   );

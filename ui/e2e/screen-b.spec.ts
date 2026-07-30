@@ -111,6 +111,7 @@ test("renders the hybrid timeline and evidence-based downstream check", async ({
   expect(acceptPayload).toEqual({
     destination: "research-agent-hybrid",
     env_file: null,
+    replace: false,
   });
   expect(browserErrors).toEqual([]);
 });

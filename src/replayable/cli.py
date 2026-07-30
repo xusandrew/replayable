@@ -1,4 +1,4 @@
-"""Typer CLI: record, replay, inspect, doctor."""
+"""Typer CLI: record, replay, accept, inspect, UI, and diagnostics."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from replayable import doctor as doctor_module
+from replayable.baseline import BaselineError, prepare_baseline
 from replayable.exit_codes import ExitCode
 from replayable.inspection import explain_match, inspect_cassette
 from replayable.runner import (
@@ -156,6 +157,66 @@ def replay(
         )
         raise typer.Exit(ExitCode.HARNESS_ERROR) from exc
     raise typer.Exit(exit_code)
+
+
+@app.command()
+def accept(
+    cassette: Annotated[
+        Path,
+        typer.Option("--cassette", help="Existing cassette baseline to replace."),
+    ],
+    env_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--env-file",
+            help="Secrets required to record the replacement baseline.",
+        ),
+    ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Replace after preview without prompting."),
+    ] = False,
+    port: Annotated[
+        int,
+        typer.Option("--port", help="Proxy port; 0 picks a free ephemeral port."),
+    ] = DEFAULT_PROXY_PORT,
+    ca_path: Annotated[
+        Path | None,
+        typer.Option("--ca-path", help="mitmproxy CA certificate path."),
+    ] = None,
+    timeout: Annotated[
+        float | None,
+        typer.Option("--timeout", help="Kill the recording after this many seconds."),
+    ] = None,
+) -> None:
+    """Record, review, and atomically replace an existing baseline."""
+
+    try:
+        with prepare_baseline(
+            source=cassette,
+            destination=cassette,
+            env_file=env_file,
+            record_executor=record_run,
+            port=port,
+            ca_path=ca_path,
+            timeout_seconds=timeout,
+        ) as candidate:
+            typer.echo(candidate.preview)
+            approved = yes or typer.confirm(
+                f"Replace {candidate.destination} with this recording?",
+                default=False,
+            )
+            if not approved:
+                typer.echo("Baseline unchanged; candidate recording discarded.")
+                raise typer.Exit(ExitCode.SUCCESS)
+            candidate.publish(replace=True)
+    except typer.Exit:
+        raise
+    except (BaselineError, HarnessError, OSError) as exc:
+        typer.echo(f"replayable: baseline not accepted: {exc}", err=True)
+        raise typer.Exit(ExitCode.HARNESS_ERROR) from exc
+    typer.echo(f"Accepted replacement baseline at {cassette.expanduser().absolute()}.")
+    raise typer.Exit(ExitCode.SUCCESS)
 
 
 @app.command()

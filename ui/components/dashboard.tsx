@@ -366,6 +366,7 @@ export function Dashboard() {
     "record" | "diff" | "fork" | "compare" | null
   >(null);
   const [destination, setDestination] = useState("research-agent-fresh");
+  const [replaceBaseline, setReplaceBaseline] = useState(false);
   const [envFile, setEnvFile] = useState("");
   const [forkAt, setForkAt] = useState(3);
 
@@ -468,10 +469,17 @@ export function Dashboard() {
     setRunning(true);
     setNotice(null);
     try {
-      const code = await recordFreshBaseline(selected, destination, envFile);
+      const code = await recordFreshBaseline(
+        selected,
+        destination,
+        envFile,
+        replaceBaseline,
+      );
       setNotice(
         code === 0
-          ? `Saved fresh baseline as ${destination}.`
+          ? replaceBaseline
+            ? `Replaced baseline ${destination}.`
+            : `Saved fresh baseline as ${destination}.`
           : `Baseline recording exited ${code}.`,
       );
       setModal(null);
@@ -484,7 +492,7 @@ export function Dashboard() {
     } finally {
       setRunning(false);
     }
-  }, [destination, envFile, selected]);
+  }, [destination, envFile, replaceBaseline, selected]);
 
   const replayFork = useCallback(async () => {
     setRunning(true);
@@ -534,7 +542,8 @@ export function Dashboard() {
             setModal("fork");
           }}
           onRecord={() => {
-            setDestination(`${selected}-fresh`);
+            setDestination(selected);
+            setReplaceBaseline(true);
             setModal("record");
           }}
           onReplay={replay}
@@ -613,6 +622,7 @@ export function Dashboard() {
                 onCompare={() => setModal("compare")}
                 onSave={() => {
                   setDestination(`${selected}-hybrid`);
+                  setReplaceBaseline(false);
                   setModal("record");
                 }}
                 result={hybrid}
@@ -655,19 +665,25 @@ export function Dashboard() {
         </div>
       </main>
       {modal === "record" && (
-        <Modal onClose={() => setModal(null)} title="Record fresh baseline">
+        <Modal
+          onClose={() => setModal(null)}
+          title={replaceBaseline ? "Re-record baseline" : "Record fresh baseline"}
+        >
           <div className="modal-body">
             <p>
-              This records a new sibling cassette. The current baseline is never
-              overwritten.
+              {replaceBaseline
+                ? "This records a complete candidate first, then atomically replaces the selected baseline."
+                : "This records a new sibling cassette. The current baseline is never overwritten."}
             </p>
-            <label className="form-field">
-              <span>Destination name</span>
-              <input
-                onChange={(event) => setDestination(event.target.value)}
-                value={destination}
-              />
-            </label>
+            {!replaceBaseline && (
+              <label className="form-field">
+                <span>Destination name</span>
+                <input
+                  onChange={(event) => setDestination(event.target.value)}
+                  value={destination}
+                />
+              </label>
+            )}
             <label className="form-field">
               <span>Environment file (optional)</span>
               <input
@@ -692,7 +708,7 @@ export function Dashboard() {
               type="button"
             >
               <RefreshCw size={14} />
-              Record baseline
+              {replaceBaseline ? "Replace baseline" : "Record baseline"}
             </button>
           </div>
         </Modal>

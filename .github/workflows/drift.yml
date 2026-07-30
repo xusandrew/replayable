@@ -1,0 +1,61 @@
+name: Nightly live drift
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: replayable-nightly-drift
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  research-agent:
+    name: Research-agent live comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      - name: Generate a replay CA
+        run: uv run python scripts/make_replay_ca.py --not-before-days 3650 --force
+
+      - name: Build the recorded workload image
+        run: |
+          docker build -t replayable/agent-base:local images/agent-base
+          docker build -t replayable/research-agent:local demo/research_agent
+
+      - name: Prepare live credentials and isolated cassette
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+            echo "ANTHROPIC_API_KEY repository secret is required" >&2
+            exit 3
+          fi
+          printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY" \
+            > "$RUNNER_TEMP/replayable-live.env"
+          chmod 600 "$RUNNER_TEMP/replayable-live.env"
+          cp -R tests/fixtures/cassettes/research-agent "$RUNNER_TEMP/cassette"
+          chmod -R u+w "$RUNNER_TEMP/cassette"
+
+      - name: Run a fully live fork and compare downstream behavior
+        uses: ./actions/github
+        with:
+          cassette: ${{ runner.temp }}/cassette
+          strict: "true"
+          allow-image-mismatch: "true"
+          fork-at: "0"
+          env-file: ${{ runner.temp }}/replayable-live.env
+          stale-after-days: "30"
+          comment: "false"

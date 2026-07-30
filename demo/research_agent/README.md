@@ -28,6 +28,15 @@ Only the record command needs network access or a real key. Replay injects a
 dummy value for `ANTHROPIC_API_KEY`, pins the recorded image and clock, and
 serves the model/tool responses from the cassette.
 
+Open the run explorer:
+
+```sh
+uv run replayable ui --cassette-root cassettes --allow-write
+```
+
+Then visit [http://127.0.0.1:8765](http://127.0.0.1:8765). The complete UI
+walkthrough is in [`../../docs/dashboard/README.md`](../../docs/dashboard/README.md).
+
 ## Negative prompt-change demo
 
 Create a fresh workspace containing the supplied prompt with only
@@ -48,3 +57,14 @@ uv run replayable replay \
 The first Anthropic request receives HTTP 599, replay exits 2, and
 `cassettes/research-agent/replay-report.json` shows the system-prompt change.
 No upstream request is made.
+
+If the changed behavior is intentional, record and review a replacement:
+
+```sh
+uv run replayable accept \
+  --cassette cassettes/research-agent \
+  --env-file demo/research_agent/.env
+```
+
+The command prints the candidate diff and prompts before atomically replacing
+the baseline.
