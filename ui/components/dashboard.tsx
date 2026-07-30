@@ -109,9 +109,10 @@ function Sidebar({
               <strong>{displayName(cassette.name)}</strong>
               <small>
                 {cassette.flow_count} flows ·{" "}
-                {new Date(cassette.created_at).toLocaleDateString(undefined, {
+                {new Date(cassette.created_at).toLocaleDateString("en-US", {
                   month: "short",
                   day: "numeric",
+                  timeZone: "UTC",
                 })}
               </small>
             </span>
@@ -414,11 +415,13 @@ export function Dashboard() {
 
   const runTimestamp = useMemo(
     () =>
-      new Date(cassette.created_at).toLocaleString(undefined, {
+      new Date(cassette.created_at).toLocaleString("en-US", {
         month: "short",
         day: "numeric",
         hour: "numeric",
         minute: "2-digit",
+        timeZone: "UTC",
+        timeZoneName: "short",
       }),
     [cassette.created_at],
   );
