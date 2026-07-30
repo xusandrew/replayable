@@ -1,4 +1,5 @@
-@import "tailwindcss";
+/* This UI uses semantic component classes; disable unused utility scanning. */
+@import "tailwindcss" source(none);
 
 :root {
   --bg: #080b0d;
