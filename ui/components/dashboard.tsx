@@ -411,7 +411,7 @@ export function Dashboard() {
 
   const loadRun = useCallback(async (name: string) => {
     const request = ++runRequest.current;
-    flowRequest.current += 1;
+    const flowGeneration = ++flowRequest.current;
     const timeline = await optional(loadTimeline(name));
     if (!timeline) {
       // Never dress a real cassette in another run's fabricated mismatch.
@@ -433,13 +433,21 @@ export function Dashboard() {
     // A slower response for a previously selected cassette must not overwrite
     // the run that is currently on screen.
     if (request !== runRequest.current) return;
-    setRun({
+    setRun((current) => ({
       timeline: effectiveTimeline,
       mismatch,
-      flow,
-      explain,
+      // A flow click that started after this refresh is the newer selection.
+      // Preserve it while still applying the refreshed run-level artifacts.
+      flow:
+        flowGeneration === flowRequest.current
+          ? flow
+          : current.flow,
+      explain:
+        flowGeneration === flowRequest.current
+          ? explain
+          : current.explain,
       forkResult,
-    });
+    }));
   }, []);
 
   useEffect(() => {
@@ -713,10 +721,10 @@ export function Dashboard() {
               <div className="mismatch-callout">
                 <span>
                   <AlertTriangle size={14} />
-                  {run.explain
-                    ? "Match key changed"
-                    : !run.mismatch
-                      ? "No mismatch selected"
+                  {!run.mismatch
+                    ? "No mismatch selected"
+                    : run.explain
+                      ? "Match key changed"
                       : run.flow
                         ? // The recorded request exists; only its normalization
                           // is missing. Do not report it as absent.

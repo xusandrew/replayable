@@ -313,6 +313,47 @@ describe("Dashboard", () => {
           };
         }
       }
+      if (path === "/api/cassettes/research-agent/flows/1") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            seq: 1,
+            key: {
+              method: "POST",
+              host: "api.anthropic.com",
+              port: 443,
+              path: "/v1/messages",
+            },
+            request: {
+              query: "",
+              headers: [["content-type", "application/json"]],
+              body_decoded: '{"system":"selected flow one"}',
+            },
+            response: { status: 200, headers: [], body_decoded: "" },
+            timing: { started: 0.1, completed: 0.2 },
+          }),
+        };
+      }
+      if (path === "/api/cassettes/research-agent/explain?flow=1") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            flow: 1,
+            match_key: "flow-one-key",
+            pre_hash: "",
+            canonical_body: '{"system":"selected flow one"}',
+            diff_body: "{}",
+            rules: {
+              version: "sha256:1",
+              field_names: [],
+              value_patterns: [],
+              preserve: [],
+            },
+          }),
+        };
+      }
       return base(path, init);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -323,10 +364,60 @@ describe("Dashboard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Replay" }));
     await waitFor(() => expect(timelineCalls).toBe(2));
     fireEvent.click(screen.getByRole("button", { name: /Flow 1/ }));
+    await screen.findByText(/flow-one-key/);
     releaseTimeline();
 
-    // The refreshed two-event timeline replaced the stale three-event one.
+    // The refreshed two-event timeline replaces the stale three-event one,
+    // without overwriting the newer explicit flow selection.
     await waitFor(() => expect(screen.getByText("2 FLOWS")).toBeInTheDocument());
+    expect(screen.getByText("FLOW 1")).toBeInTheDocument();
+    expect(screen.getByTestId("removed-pane")).toHaveTextContent(
+      "selected flow one",
+    );
+  });
+
+  it("does not claim a clean run changed a match key", async () => {
+    const flow = {
+      seq: 1,
+      key: {
+        method: "POST",
+        host: "api.anthropic.com",
+        port: 443,
+        path: "/v1/messages",
+      },
+      request: {
+        query: "",
+        headers: [["content-type", "application/json"]],
+        body_decoded: '{"system":"unchanged"}',
+      },
+      response: { status: 200, headers: [], body_decoded: "" },
+      timing: { started: 0.1, completed: 0.2 },
+    };
+    const explanation = {
+      flow: 1,
+      match_key: "unchanged-key",
+      pre_hash: "",
+      canonical_body: '{"system":"unchanged"}',
+      diff_body: "{}",
+      rules: {
+        version: "sha256:1",
+        field_names: [],
+        value_patterns: [],
+        preserve: [],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      apiFetch({
+        "/api/cassettes/research-agent/mismatch": undefined,
+        "/api/cassettes/research-agent/flows/1": flow,
+        "/api/cassettes/research-agent/explain?flow=1": explanation,
+      }),
+    );
+    render(<Dashboard />);
+
+    expect(await screen.findByText("No mismatch selected")).toBeInTheDocument();
+    expect(screen.queryByText("Match key changed")).not.toBeInTheDocument();
   });
 
   it("renders a timeline event whose cost metric is null", async () => {
