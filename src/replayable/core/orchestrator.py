@@ -556,6 +556,10 @@ def replay_run(
         )
     if env_file is not None:
         raise HarnessError("--env-file is only valid with --fork-at")
+    # A fork result describes the latest completed hybrid run. Once a normal
+    # replay starts, leaving it behind would make the dashboard mislabel the
+    # newer run as HYBRID.
+    (cassette / FORK_RESULT_FILE_NAME).unlink(missing_ok=True)
     replay_user_environment = dict(nonsecret_environment)
     # Use the same token record wrote into bodies/transcripts so body-auth APIs
     # and echoed secrets stay matchable without real credentials.
@@ -856,6 +860,7 @@ def _event_summaries(events: list[Event]) -> list[dict[str, Any]]:
         chunks = response.get("sse_chunks") if isinstance(response, dict) else None
         summary: dict[str, Any] = {
             "seq": event.seq,
+            "lamport": event.lamport,
             "t_rel": event.t_rel,
             "channel": event.channel.value,
             "kind": event.kind.value,

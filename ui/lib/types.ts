@@ -75,4 +75,59 @@ export type RunData = {
   flow: FlowDetail | null;
   mismatch: Mismatch | null;
   explain: Explain | null;
+  forkResult: ForkResult | null;
+};
+
+export type ForkResult = {
+  version: number;
+  mode: "hybrid";
+  fork_at: number;
+  exit_code: number;
+  segments: {
+    pinned: {
+      target_flow_count: number;
+      served_flow_count: number;
+      estimated_cost_usd: number;
+    };
+    live: {
+      request_count: number;
+      response_count: number;
+      error_count: number;
+      flow_count: number;
+      model_calls: number;
+      models: string[];
+      tokens: Record<string, number> | null;
+      estimated_cost_usd: number | null;
+      wall_time_seconds: number;
+    };
+  };
+  timing: { wall_time_seconds: number };
+  downstream: {
+    matches: boolean;
+    exit_code: { matches: boolean; baseline: number; candidate: number };
+    stdout: { matches: boolean };
+    workspace: {
+      matches: boolean;
+      diff: { added: string[]; removed: string[]; changed: string[] };
+    };
+    tool_calls: {
+      matches: boolean;
+      baseline_count: number;
+      candidate_count: number;
+      summary: { insert: number; delete: number; substitute: number };
+    };
+    similarity: {
+      kind: "lexical_structural";
+      score: number;
+      threshold: number;
+      passes: boolean;
+      components: {
+        transcript_lexical: number;
+        tool_sequence: number;
+        output_files: number;
+      };
+      weights: Record<string, number>;
+    };
+  };
+  events: TimelineEvent[];
 };
