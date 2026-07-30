@@ -495,7 +495,9 @@ class UIApp:
                 "content-type": media_type,
                 "content-length": str(len(payload)),
                 "cache-control": (
-                    "no-cache" if path.name == "index.html" else "public, max-age=31536000"
+                    "public, max-age=31536000, immutable"
+                    if relative.parts[:1] == ("assets",)
+                    else "no-cache"
                 ),
             },
         )
@@ -533,7 +535,16 @@ def _handler(app: UIApp) -> type[BaseHTTPRequestHandler]:
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.send_header("x-content-type-options", "nosniff")
-            self.send_header("content-security-policy", "default-src 'self'")
+            # Vite emits external module scripts, so script execution can stay
+            # self-only. React uses inline style attributes for measured bars
+            # and score rings; keep those styles local while permitting them.
+            self.send_header(
+                "content-security-policy",
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "connect-src 'self'; img-src 'self' data:",
+            )
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(response.body)

@@ -1,0 +1,589 @@
+"use client";
+
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  CircleStop,
+  Clock3,
+  Code2,
+  Database,
+  FileDiff,
+  Play,
+  Plus,
+  Radio,
+  RefreshCw,
+  Search,
+  Settings2,
+  ShieldCheck,
+  WifiOff,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  listCassettes,
+  loadExplain,
+  loadFlow,
+  loadMismatch,
+  loadTimeline,
+  recordFreshBaseline,
+  runReplay,
+} from "@/lib/api";
+import { demoCassettes, demoRun } from "@/lib/demo";
+import type {
+  CassetteSummary,
+  Explain,
+  FlowDetail,
+  Mismatch,
+  RunData,
+  TimelineEvent,
+} from "@/lib/types";
+import { Timeline } from "./timeline";
+import { TokenDiff } from "./token-diff";
+
+function displayName(name: string): string {
+  return name
+    .split(/[-_]/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function mismatchSequence(mismatch: Mismatch | null): number | null {
+  return mismatch?.nearest_candidates[0]?.seq ?? null;
+}
+
+async function optional<T>(operation: Promise<T>): Promise<T | null> {
+  try {
+    return await operation;
+  } catch {
+    return null;
+  }
+}
+
+function Sidebar({
+  cassettes,
+  selected,
+  onSelect,
+}: {
+  cassettes: CassetteSummary[];
+  selected: string;
+  onSelect: (name: string) => void;
+}) {
+  return (
+    <aside className="sidebar">
+      <div className="brand">
+        <span className="brand-mark">
+          <Radio size={18} />
+        </span>
+        <span>
+          <strong>replayable</strong>
+          <small>local run explorer</small>
+        </span>
+      </div>
+      <div className="sidebar-section-label">
+        <span>Cassettes</span>
+        <button aria-label="Add cassette" className="icon-button" type="button">
+          <Plus size={15} />
+        </button>
+      </div>
+      <label className="search-box">
+        <Search size={14} />
+        <input aria-label="Filter cassettes" placeholder="Filter runs…" />
+      </label>
+      <nav className="cassette-list" aria-label="Cassettes">
+        {cassettes.map((cassette) => (
+          <button
+            className={`cassette-item ${
+              cassette.name === selected ? "active" : ""
+            }`}
+            key={cassette.name}
+            onClick={() => onSelect(cassette.name)}
+            type="button"
+          >
+            <span className="cassette-icon">
+              <Database size={16} />
+            </span>
+            <span className="cassette-copy">
+              <strong>{displayName(cassette.name)}</strong>
+              <small>
+                {cassette.flow_count} flows ·{" "}
+                {new Date(cassette.created_at).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  timeZone: "UTC",
+                })}
+              </small>
+            </span>
+            <span className={`status-dot ${cassette.status}`} />
+          </button>
+        ))}
+      </nav>
+      <div className="sidebar-legend">
+        <span>
+          <i className="status-dot replayable" /> Replayable
+        </span>
+        <span>
+          <i className="status-dot mismatch" /> Mismatch
+        </span>
+      </div>
+      <button className="sidebar-settings" type="button">
+        <Settings2 size={15} />
+        Workspace settings
+      </button>
+    </aside>
+  );
+}
+
+function RunHeader({
+  cassette,
+  strict,
+  setStrict,
+  running,
+  onReplay,
+  onRecord,
+}: {
+  cassette: CassetteSummary;
+  strict: boolean;
+  setStrict: (strict: boolean) => void;
+  running: boolean;
+  onReplay: () => void;
+  onRecord: () => void;
+}) {
+  return (
+    <header className="run-header">
+      <div>
+        <div className="breadcrumb">
+          Cassettes <span>/</span> {cassette.name}
+        </div>
+        <div className="run-title">
+          <h1>{displayName(cassette.name)}</h1>
+          <span className="offline-pill">
+            <WifiOff size={13} />
+            OFFLINE
+          </span>
+        </div>
+      </div>
+      <div className="header-actions">
+        <label className="strict-control">
+          <span>
+            Strict mode
+            <small>Unconsumed flows fail</small>
+          </span>
+          <input
+            checked={strict}
+            onChange={(event) => setStrict(event.target.checked)}
+            type="checkbox"
+          />
+          <i />
+        </label>
+        <button className="button secondary" onClick={onRecord} type="button">
+          <RefreshCw size={15} />
+          Re-record baseline
+        </button>
+        <button
+          className="button primary"
+          disabled={running}
+          onClick={onReplay}
+          type="button"
+        >
+          {running ? <CircleStop size={15} /> : <Play fill="currentColor" size={15} />}
+          {running ? "Running…" : "Replay"}
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function BehaviorBanner({
+  mismatchAt,
+  served,
+  onViewDiff,
+}: {
+  mismatchAt: number;
+  served: number;
+  onViewDiff: () => void;
+}) {
+  return (
+    <section className="behavior-banner">
+      <span className="banner-icon">
+        <AlertTriangle size={21} />
+      </span>
+      <span className="banner-copy">
+        <strong>Behavior changed</strong>
+        <span>
+          Replay stopped at flow {mismatchAt}. The outgoing model request no
+          longer matches the recorded baseline.
+        </span>
+      </span>
+      <span className="banner-stats">
+        <b>exit 2</b>
+        <span>mismatch at flow {mismatchAt}</span>
+        <span>{served}/7 served</span>
+      </span>
+      <button
+        className="button banner-button"
+        onClick={onViewDiff}
+        type="button"
+      >
+        <FileDiff size={15} />
+        View full diff
+      </button>
+    </section>
+  );
+}
+
+function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        aria-label={title}
+        aria-modal="true"
+        className="modal-card"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="modal-heading">
+          <strong>{title}</strong>
+          <button
+            aria-label="Close dialog"
+            className="icon-button"
+            onClick={onClose}
+            type="button"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function NormalizationPanel({ explain }: { explain: Explain | null }) {
+  if (!explain) return null;
+  const fields = explain.rules.field_names.slice(0, 5);
+  return (
+    <div className="normalization-panel">
+      <div className="normalization-title">
+        <ShieldCheck size={15} />
+        <span>
+          Normalization applied
+          <small>{explain.rules.version.slice(0, 18)}…</small>
+        </span>
+        <ChevronDown size={14} />
+      </div>
+      <div className="rule-badges">
+        {fields.map((field) => (
+          <span className="rule-badge ignored" key={field}>
+            <Check size={11} />
+            {field} ignored
+          </span>
+        ))}
+        <span className="rule-badge changed">
+          <X size={11} />
+          system changed
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export function Dashboard() {
+  const [cassettes, setCassettes] = useState<CassetteSummary[]>(demoCassettes);
+  const [selected, setSelected] = useState(demoCassettes[0].name);
+  const [run, setRun] = useState<RunData>(demoRun);
+  const [strict, setStrict] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [modal, setModal] = useState<"record" | "diff" | null>(null);
+  const [destination, setDestination] = useState("research-agent-fresh");
+  const [envFile, setEnvFile] = useState("");
+
+  const loadRun = useCallback(async (name: string) => {
+    const timeline = await optional(loadTimeline(name));
+    if (!timeline) {
+      setRun(demoRun);
+      return;
+    }
+    const mismatch = await optional(loadMismatch(name));
+    const sequence = mismatchSequence(mismatch) ?? timeline[0]?.seq ?? 1;
+    const [flow, explain] = await Promise.all([
+      optional(loadFlow(name, sequence)),
+      optional(loadExplain(name, sequence)),
+    ]);
+    setRun({ timeline, mismatch, flow, explain });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    listCassettes()
+      .then((items) => {
+        if (!active || items.length === 0) return;
+        setCassettes(items);
+        setSelected(items[0].name);
+        return loadRun(items[0].name);
+      })
+      .catch(() => {
+        // The checked-in demo state keeps the static export reviewable even
+        // before the local API process has started.
+      });
+    return () => {
+      active = false;
+    };
+  }, [loadRun]);
+
+  const cassette =
+    cassettes.find((item) => item.name === selected) ?? cassettes[0];
+  const mismatchAt = mismatchSequence(run.mismatch);
+  const served = mismatchAt === null ? run.timeline.length : mismatchAt - 1;
+  const progress = Math.round((served / Math.max(run.timeline.length, 1)) * 100);
+  const selectedSequence = run.flow?.seq ?? mismatchAt;
+
+  const liveBody =
+    run.mismatch?.live_request.canonical_body ?? run.flow?.request.body_decoded ?? "";
+  const recordedBody = run.flow?.request.body_decoded ?? "";
+
+  const selectCassette = useCallback(
+    (name: string) => {
+      setSelected(name);
+      setNotice(null);
+      void loadRun(name);
+    },
+    [loadRun],
+  );
+
+  const selectFlow = useCallback(
+    async (sequence: number) => {
+      const [flow, explain] = await Promise.all([
+        optional(loadFlow(selected, sequence)),
+        optional(loadExplain(selected, sequence)),
+      ]);
+      setRun((current) => ({
+        ...current,
+        flow: flow ?? current.flow,
+        explain: explain ?? current.explain,
+      }));
+    },
+    [selected],
+  );
+
+  const replay = useCallback(async () => {
+    setRunning(true);
+    setNotice(null);
+    try {
+      const code = await runReplay(selected, strict);
+      setNotice(code === 0 ? "Replay matched the baseline." : `Replay exited ${code}.`);
+      await loadRun(selected);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Replay failed.");
+    } finally {
+      setRunning(false);
+    }
+  }, [loadRun, selected, strict]);
+
+  const recordBaseline = useCallback(async () => {
+    setRunning(true);
+    setNotice(null);
+    try {
+      const code = await recordFreshBaseline(selected, destination, envFile);
+      setNotice(
+        code === 0
+          ? `Saved fresh baseline as ${destination}.`
+          : `Baseline recording exited ${code}.`,
+      );
+      setModal(null);
+      const items = await listCassettes();
+      setCassettes(items);
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Baseline recording failed.",
+      );
+    } finally {
+      setRunning(false);
+    }
+  }, [destination, envFile, selected]);
+
+  const runTimestamp = useMemo(
+    () =>
+      new Date(cassette.created_at).toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: "UTC",
+        timeZoneName: "short",
+      }),
+    [cassette.created_at],
+  );
+
+  return (
+    <div className="app-shell">
+      <Sidebar
+        cassettes={cassettes}
+        onSelect={selectCassette}
+        selected={selected}
+      />
+      <main className="main-area">
+        <RunHeader
+          cassette={cassette}
+          onRecord={() => {
+            setDestination(`${selected}-fresh`);
+            setModal("record");
+          }}
+          onReplay={replay}
+          running={running}
+          setStrict={setStrict}
+          strict={strict}
+        />
+        {notice && (
+          <div className="notice" role="status">
+            <Activity size={14} />
+            {notice}
+          </div>
+        )}
+        <div className="run-meta-bar">
+          <span>
+            <Clock3 size={13} />
+            Recorded {runTimestamp}
+          </span>
+          <span>
+            <Code2 size={13} />
+            {cassette.image.digest.slice(0, 19)}…
+          </span>
+          <span>
+            <ShieldCheck size={13} />
+            exact image
+          </span>
+        </div>
+        {mismatchAt !== null && (
+          <BehaviorBanner
+            mismatchAt={mismatchAt}
+            onViewDiff={() => setModal("diff")}
+            served={served}
+          />
+        )}
+        <section className="progress-card">
+          <div className="progress-copy">
+            <span>
+              <strong>{served}/{run.timeline.length}</strong> flows served
+            </span>
+            <span>
+              stopped {run.timeline[mismatchAt ? mismatchAt - 1 : 0]?.t_rel.toFixed(1)}s
+              in
+            </span>
+          </div>
+          <div className="progress-track">
+            <i style={{ width: `${progress}%` }} />
+          </div>
+        </section>
+        <div className="workspace-grid">
+          <section className="panel timeline-panel">
+            <div className="panel-heading">
+              <span>
+                <Activity size={15} />
+                Run timeline
+              </span>
+              <b>{run.timeline.length} FLOWS</b>
+            </div>
+            <Timeline
+              events={run.timeline}
+              mismatchAt={mismatchAt}
+              onSelect={selectFlow}
+              selected={selectedSequence}
+            />
+          </section>
+          <section className="panel inspection-panel">
+            <div className="panel-heading">
+              <span>
+                <FileDiff size={15} />
+                Request comparison
+              </span>
+              <b>FLOW {selectedSequence ?? "—"}</b>
+            </div>
+            <div className="mismatch-callout">
+              <span>
+                <AlertTriangle size={14} />
+                Match key changed
+              </span>
+              <code>{run.explain?.match_key.slice(0, 12) ?? "unavailable"}…</code>
+            </div>
+            <TokenDiff live={liveBody} recorded={recordedBody} />
+            <NormalizationPanel explain={run.explain} />
+            <div className="diff-footer">
+              <span>
+                <i className="legend removed" /> recorded only
+              </span>
+              <span>
+                <i className="legend added" /> replay only
+              </span>
+              <button className="text-button" type="button">
+                Inspect raw request
+                <ArrowRight size={13} />
+              </button>
+            </div>
+          </section>
+        </div>
+      </main>
+      {modal === "record" && (
+        <Modal onClose={() => setModal(null)} title="Record fresh baseline">
+          <div className="modal-body">
+            <p>
+              This records a new sibling cassette. The current baseline is never
+              overwritten.
+            </p>
+            <label className="form-field">
+              <span>Destination name</span>
+              <input
+                onChange={(event) => setDestination(event.target.value)}
+                value={destination}
+              />
+            </label>
+            <label className="form-field">
+              <span>Environment file (optional)</span>
+              <input
+                onChange={(event) => setEnvFile(event.target.value)}
+                placeholder="/absolute/path/to/.env"
+                value={envFile}
+              />
+            </label>
+          </div>
+          <div className="modal-actions">
+            <button
+              className="button secondary"
+              onClick={() => setModal(null)}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="button primary"
+              disabled={running || !destination}
+              onClick={recordBaseline}
+              type="button"
+            >
+              <RefreshCw size={14} />
+              Record baseline
+            </button>
+          </div>
+        </Modal>
+      )}
+      {modal === "diff" && (
+        <Modal onClose={() => setModal(null)} title="Full matcher diff">
+          <pre className="full-diff">
+            {run.mismatch?.diff || "No textual matcher diff is available."}
+          </pre>
+        </Modal>
+      )}
+    </div>
+  );
+}
