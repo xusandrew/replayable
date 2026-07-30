@@ -355,6 +355,9 @@ def test_http_adapter_binds_loopback_and_preserves_api_errors(tmp_path):
             assert response.status == 200
             assert json.load(response)["cassettes"][0]["name"] == "demo"
             assert response.headers["x-content-type-options"] == "nosniff"
+            assert "connect-src 'self'" in response.headers[
+                "content-security-policy"
+            ]
 
         request = urllib.request.Request(
             f"{base}/api/cassettes/demo/replay",

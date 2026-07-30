@@ -908,6 +908,19 @@ headers, path traversal, concurrent mutations, and in-place baseline
 replacement. A fresh baseline is recorded in hidden staging and published only
 after a successful run.
 
+The dashboard source lives in `ui/` and is a Next.js static export. End users
+do not need Node: the production build copies its assets into the Python
+package. Contributors can verify the complete UI with:
+
+```sh
+cd ui
+pnpm install
+pnpm test
+pnpm lint
+pnpm build
+pnpm test:e2e
+```
+
 Run any command with `--help` for the generated Typer documentation:
 
 ```sh

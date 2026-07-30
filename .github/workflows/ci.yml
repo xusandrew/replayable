@@ -37,6 +37,36 @@ jobs:
           --cov=replayable.matcher --cov-branch
           --cov-report=term --cov-fail-under=90
 
+  dashboard:
+    name: Dashboard build and browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm lint
+      - run: pnpm build
+      - name: Verify packaged assets are current
+        run: git diff --exit-code -- ../src/replayable/ui_static
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked
+        working-directory: .
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+
   e2e:
     name: Docker end-to-end
     runs-on: ubuntu-latest

@@ -50,4 +50,12 @@ Thumbs.db
 /workspace.tar.gz
 /workspace.sha256
 
+# Dashboard build and test outputs (the packaged static export is tracked).
+/ui/.next/
+/ui/node_modules/
+/ui/out/
+/ui/test-results/
+/ui/playwright-report/
+/ui/*.tsbuildinfo
+
 replayable-mvp-implementation-spec.md

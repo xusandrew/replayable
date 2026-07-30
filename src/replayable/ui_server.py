@@ -495,7 +495,9 @@ class UIApp:
                 "content-type": media_type,
                 "content-length": str(len(payload)),
                 "cache-control": (
-                    "no-cache" if path.name == "index.html" else "public, max-age=31536000"
+                    "public, max-age=31536000, immutable"
+                    if "_next" in relative.parts
+                    else "no-cache"
                 ),
             },
         )
@@ -533,7 +535,17 @@ def _handler(app: UIApp) -> type[BaseHTTPRequestHandler]:
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.send_header("x-content-type-options", "nosniff")
-            self.send_header("content-security-policy", "default-src 'self'")
+            # Next's static export uses inline bootstrap records to hydrate.
+            # No user-controlled HTML is rendered; API data is inserted by
+            # React as text. Keep all network sources local while permitting
+            # that generated bootstrap and Tailwind's inline style attributes.
+            self.send_header(
+                "content-security-policy",
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "connect-src 'self'; img-src 'self' data:",
+            )
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(response.body)
