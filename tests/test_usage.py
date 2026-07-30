@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import gzip
+import json
 
+import pytest
 from fixtures.corpus import fixture_cassette
 
 from replayable.cassette import CassetteReader
@@ -69,6 +71,23 @@ def test_unreadable_or_unsupported_encoding_has_no_fabricated_usage():
 
     assert extract_usage(_flow(corrupt, content_encoding="gzip")) is None
     assert extract_usage(_flow(plain, content_encoding="br")) is None
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"input_tokens": "10", "output_tokens": 2},
+        {"input_tokens": 10, "output_tokens": -1},
+        {"input_tokens": True, "output_tokens": 2},
+        {"input_tokens": 10},
+    ],
+)
+def test_malformed_or_incomplete_counters_have_no_fabricated_usage(usage):
+    flow = _flow(
+        [{"data_utf8": f"data: {json.dumps({'usage': usage})}\n\n"}]
+    )
+
+    assert extract_usage(flow) is None
 
 
 def test_non_streaming_json_usage_is_supported():

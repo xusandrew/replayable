@@ -489,6 +489,9 @@ def test_record_pins_project_rules_in_cassette_manifest(monkeypatch, tmp_path, c
         == ExitCode.SUCCESS
     )
     manifest = json.loads((cassette / "manifest.json").read_text(encoding="utf-8"))
+    observation = json.loads(
+        (cassette / "observation.json").read_text(encoding="utf-8")
+    )
     assert (cassette / "replayable.toml").read_text(encoding="utf-8") == (
         rules_path.read_text(encoding="utf-8")
     )
@@ -496,6 +499,21 @@ def test_record_pins_project_rules_in_cassette_manifest(monkeypatch, tmp_path, c
     assert manifest["policy"]["hash"].startswith("sha256:")
     assert manifest["policy"]["config"]["channels"]["network"] == PolicyMode.FREEZE
     assert manifest["policy"]["resolved"] == []
+    assert manifest["record_exit_code"] == 0
+    assert observation["process"]["exit_code"] == 0
+    assert observation["model"] == {
+        "calls": 0,
+        "models": [],
+        "usage_complete": True,
+        "tokens": {
+            "input": 0,
+            "output": 0,
+            "cache_write": 0,
+            "cache_read": 0,
+        },
+        "cost_complete": True,
+        "estimated_cost_usd": 0.0,
+    }
 
 
 def test_explain_match_renders_prehash_and_normalized_body(tmp_path):

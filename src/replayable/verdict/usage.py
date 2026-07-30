@@ -78,6 +78,12 @@ def _decode_content(chunks: Iterable[bytes], content_encoding: str) -> bytes:
     return b""
 
 
+def decode_response_body(flow: dict[str, Any], body: bytes) -> bytes:
+    """Decode a recorded response body using its persisted content encoding."""
+
+    return _decode_content([body], _header_value(flow, "content-encoding"))
+
+
 def sse_documents(flow: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse complete SSE data documents across transport and CRLF boundaries."""
 
@@ -114,14 +120,21 @@ def sse_documents(flow: dict[str, Any]) -> list[dict[str, Any]]:
     return documents
 
 
-def _token_count(value: Any) -> int:
-    if isinstance(value, bool):
-        return 0
-    try:
-        count = int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-    return max(count, 0)
+def _usage_counter(
+    documents: list[dict[str, Any]],
+    name: str,
+    *,
+    required: bool,
+) -> int | None:
+    values = [document[name] for document in documents if name in document]
+    if not values:
+        return None if required else 0
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in values
+    ):
+        return None
+    return max(values)
 
 
 def extract_usage(
@@ -142,10 +155,7 @@ def extract_usage(
                 inline = representation.get("inline_utf8")
                 response_body = inline.encode() if isinstance(inline, str) else None
         if response_body is not None:
-            decoded = _decode_content(
-                [response_body],
-                _header_value(flow, "content-encoding"),
-            )
+            decoded = decode_response_body(flow, response_body)
             try:
                 document = json.loads(decoded)
             except (json.JSONDecodeError, UnicodeDecodeError):
@@ -164,15 +174,30 @@ def extract_usage(
             usage_documents.append(usage)
     if not usage_documents:
         return None
+    input_tokens = _usage_counter(
+        usage_documents, "input_tokens", required=True
+    )
+    output_tokens = _usage_counter(
+        usage_documents, "output_tokens", required=True
+    )
+    cache_write_tokens = _usage_counter(
+        usage_documents, "cache_creation_input_tokens", required=False
+    )
+    cache_read_tokens = _usage_counter(
+        usage_documents, "cache_read_input_tokens", required=False
+    )
+    if None in (
+        input_tokens,
+        output_tokens,
+        cache_write_tokens,
+        cache_read_tokens,
+    ):
+        return None
     return TokenUsage(
-        input=max(_token_count(value.get("input_tokens")) for value in usage_documents),
-        output=max(_token_count(value.get("output_tokens")) for value in usage_documents),
-        cache_write=max(
-            _token_count(value.get("cache_creation_input_tokens")) for value in usage_documents
-        ),
-        cache_read=max(
-            _token_count(value.get("cache_read_input_tokens")) for value in usage_documents
-        ),
+        input=input_tokens,
+        output=output_tokens,
+        cache_write=cache_write_tokens,
+        cache_read=cache_read_tokens,
     )
 
 

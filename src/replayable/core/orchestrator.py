@@ -57,6 +57,11 @@ from replayable.snapshot import (
     diff_file_manifests,
     load_recorded_snapshot,
 )
+from replayable.verdict.observation import (
+    OBSERVATION_FILE_NAME,
+    ObservationError,
+    write_observation,
+)
 
 ProxyProcess = Callable[..., AbstractContextManager[None]]
 
@@ -173,6 +178,7 @@ def _secret_values_file(secrets: dict[str, str]) -> Iterator[Path | None]:
 
 def _remove_stale_replay_artifacts(out: Path) -> None:
     for stale in (
+        OBSERVATION_FILE_NAME,
         REPLAY_REPORT_FILE_NAME,
         REPLAY_STATE_FILE_NAME,
         LAST_REPLAY_FILE_NAME,
@@ -373,8 +379,10 @@ def record_run(
             stdout_sha256=_sha256_path(out / AGENT_STDOUT_FILE_NAME),
             stderr_sha256=_sha256_path(out / AGENT_STDERR_FILE_NAME),
             policy=build_policy_manifest(policy, resolved_policy),
+            record_exit_code=return_code,
         )
-    except (CassetteError, PolicyError) as exc:
+        write_observation(out)
+    except (CassetteError, ObservationError, PolicyError) as exc:
         raise HarnessError(f"recorded cassette is invalid: {exc}") from exc
     _log_event(run_log, "record_complete", flow_count=len(loaded.flows))
     return ExitCode.SUCCESS if return_code == 0 else ExitCode.AGENT_FAILED
