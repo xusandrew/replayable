@@ -11,6 +11,7 @@ from typing import Any
 from replayable.snapshot import diff_file_manifests
 from replayable.verdict.differ_structural import diff_tool_calls
 from replayable.verdict.observation import Observation
+from replayable.verdict.similarity import downstream_similarity
 
 FORK_RESULT_FILE_NAME = "fork-result.json"
 FORK_RESULT_VERSION = 1
@@ -94,6 +95,11 @@ def build_fork_result(
     stdout_matches = baseline.transcript.stdout_sha256 == candidate.transcript.stdout_sha256
     exit_matches = baseline.exit_code == candidate.exit_code
     tool_diff = diff_tool_calls(baseline.tool_calls, candidate.tool_calls)
+    similarity = downstream_similarity(
+        baseline,
+        candidate,
+        structural_diff=tool_diff,
+    )
     downstream_matches = workspace_matches and stdout_matches and exit_matches and tool_diff.matches
 
     return {
@@ -140,6 +146,7 @@ def build_fork_result(
                 "diff": workspace_diff,
             },
             "tool_calls": tool_diff.as_dict(),
+            "similarity": similarity,
         },
         "live_observation": live.as_dict(),
         "events": events,

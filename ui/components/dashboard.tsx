@@ -11,6 +11,8 @@ import {
   Code2,
   Database,
   FileDiff,
+  GitFork,
+  Network,
   Play,
   Plus,
   Radio,
@@ -26,9 +28,11 @@ import {
   listCassettes,
   loadExplain,
   loadFlow,
+  loadForkResult,
   loadMismatch,
   loadTimeline,
   recordFreshBaseline,
+  runFork,
   runReplay,
 } from "@/lib/api";
 import { demoCassettes, demoRun } from "@/lib/demo";
@@ -40,8 +44,9 @@ import type {
   RunData,
   TimelineEvent,
 } from "@/lib/types";
-import { Timeline } from "./timeline";
+import { hybridTimeline, Timeline } from "./timeline";
 import { TokenDiff } from "./token-diff";
+import { DownstreamCheck } from "./downstream-check";
 
 function displayName(name: string): string {
   return name
@@ -143,6 +148,8 @@ function RunHeader({
   running,
   onReplay,
   onRecord,
+  hybrid,
+  onFork,
 }: {
   cassette: CassetteSummary;
   strict: boolean;
@@ -150,6 +157,8 @@ function RunHeader({
   running: boolean;
   onReplay: () => void;
   onRecord: () => void;
+  hybrid: boolean;
+  onFork: () => void;
 }) {
   return (
     <header className="run-header">
@@ -159,9 +168,9 @@ function RunHeader({
         </div>
         <div className="run-title">
           <h1>{displayName(cassette.name)}</h1>
-          <span className="offline-pill">
-            <WifiOff size={13} />
-            OFFLINE
+          <span className={`offline-pill ${hybrid ? "hybrid" : ""}`}>
+            {hybrid ? <Network size={13} /> : <WifiOff size={13} />}
+            {hybrid ? "HYBRID" : "OFFLINE"}
           </span>
         </div>
       </div>
@@ -181,6 +190,10 @@ function RunHeader({
         <button className="button secondary" onClick={onRecord} type="button">
           <RefreshCw size={15} />
           Re-record baseline
+        </button>
+        <button className="button fork-button" onClick={onFork} type="button">
+          <GitFork size={15} />
+          Replay fork
         </button>
         <button
           className="button primary"
@@ -230,6 +243,50 @@ function BehaviorBanner({
         <FileDiff size={15} />
         View full diff
       </button>
+    </section>
+  );
+}
+
+function HybridSummary({
+  result,
+}: {
+  result: NonNullable<RunData["forkResult"]>;
+}) {
+  const live = result.segments.live;
+  return (
+    <section className="hybrid-summary">
+      <span className="hybrid-title">
+        <GitFork size={18} />
+        <span>
+          <strong>Hybrid replay complete</strong>
+          <small>Network resumed after flow {result.fork_at}</small>
+        </span>
+      </span>
+      <span className="segment-stat pinned">
+        <small>PINNED</small>
+        <strong>{result.segments.pinned.served_flow_count} flows</strong>
+        <b>$0.00</b>
+      </span>
+      <span className="segment-arrow">
+        <ArrowRight size={17} />
+      </span>
+      <span className="segment-stat live">
+        <small>LIVE · FRESH CALLS</small>
+        <strong>
+          {live.flow_count} flows
+          {live.error_count > 0 ? ` · ${live.error_count} failed` : ""}
+        </strong>
+        <b>
+          {live.estimated_cost_usd === null
+            ? "cost unavailable"
+            : `$${live.estimated_cost_usd.toFixed(4)}`}
+        </b>
+      </span>
+      <span className="segment-stat timing">
+        <small>WALL TIME</small>
+        <strong>{result.timing.wall_time_seconds.toFixed(1)}s</strong>
+        <b>{live.model_calls} model call{live.model_calls === 1 ? "" : "s"}</b>
+      </span>
     </section>
   );
 }
@@ -305,9 +362,12 @@ export function Dashboard() {
   const [strict, setStrict] = useState(true);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [modal, setModal] = useState<"record" | "diff" | null>(null);
+  const [modal, setModal] = useState<
+    "record" | "diff" | "fork" | "compare" | null
+  >(null);
   const [destination, setDestination] = useState("research-agent-fresh");
   const [envFile, setEnvFile] = useState("");
+  const [forkAt, setForkAt] = useState(3);
 
   const loadRun = useCallback(async (name: string) => {
     const timeline = await optional(loadTimeline(name));
@@ -315,13 +375,25 @@ export function Dashboard() {
       setRun(demoRun);
       return;
     }
-    const mismatch = await optional(loadMismatch(name));
+    const [mismatch, forkResult] = await Promise.all([
+      optional(loadMismatch(name)),
+      optional(loadForkResult(name)),
+    ]);
     const sequence = mismatchSequence(mismatch) ?? timeline[0]?.seq ?? 1;
     const [flow, explain] = await Promise.all([
       optional(loadFlow(name, sequence)),
       optional(loadExplain(name, sequence)),
     ]);
-    setRun({ timeline, mismatch, flow, explain });
+    const effectiveTimeline = forkResult
+      ? hybridTimeline(timeline, forkResult.fork_at, forkResult.events)
+      : timeline;
+    setRun({
+      timeline: effectiveTimeline,
+      mismatch,
+      flow,
+      explain,
+      forkResult,
+    });
   }, []);
 
   useEffect(() => {
@@ -345,6 +417,7 @@ export function Dashboard() {
   const cassette =
     cassettes.find((item) => item.name === selected) ?? cassettes[0];
   const mismatchAt = mismatchSequence(run.mismatch);
+  const hybrid = run.forkResult;
   const served = mismatchAt === null ? run.timeline.length : mismatchAt - 1;
   const progress = Math.round((served / Math.max(run.timeline.length, 1)) * 100);
   const selectedSequence = run.flow?.seq ?? mismatchAt;
@@ -413,6 +486,25 @@ export function Dashboard() {
     }
   }, [destination, envFile, selected]);
 
+  const replayFork = useCallback(async () => {
+    setRunning(true);
+    setNotice(null);
+    try {
+      const code = await runFork(selected, forkAt, envFile);
+      setNotice(
+        code === 0
+          ? "Hybrid replay matched the baseline."
+          : `Hybrid replay exited ${code}; inspect the downstream check.`,
+      );
+      setModal(null);
+      await loadRun(selected);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Hybrid replay failed.");
+    } finally {
+      setRunning(false);
+    }
+  }, [envFile, forkAt, loadRun, selected]);
+
   const runTimestamp = useMemo(
     () =>
       new Date(cassette.created_at).toLocaleString("en-US", {
@@ -436,6 +528,11 @@ export function Dashboard() {
       <main className="main-area">
         <RunHeader
           cassette={cassette}
+          hybrid={hybrid !== null}
+          onFork={() => {
+            setForkAt(hybrid?.fork_at ?? Math.min(3, cassette.flow_count));
+            setModal("fork");
+          }}
           onRecord={() => {
             setDestination(`${selected}-fresh`);
             setModal("record");
@@ -465,27 +562,34 @@ export function Dashboard() {
             exact image
           </span>
         </div>
-        {mismatchAt !== null && (
+        {hybrid && <HybridSummary result={hybrid} />}
+        {!hybrid && mismatchAt !== null && (
           <BehaviorBanner
             mismatchAt={mismatchAt}
             onViewDiff={() => setModal("diff")}
             served={served}
           />
         )}
-        <section className="progress-card">
-          <div className="progress-copy">
-            <span>
-              <strong>{served}/{run.timeline.length}</strong> flows served
-            </span>
-            <span>
-              stopped {run.timeline[mismatchAt ? mismatchAt - 1 : 0]?.t_rel.toFixed(1)}s
-              in
-            </span>
-          </div>
-          <div className="progress-track">
-            <i style={{ width: `${progress}%` }} />
-          </div>
-        </section>
+        {!hybrid && (
+          <section className="progress-card">
+            <div className="progress-copy">
+              <span>
+                <strong>
+                  {served}/{run.timeline.length}
+                </strong>{" "}
+                flows served
+              </span>
+              <span>
+                stopped{" "}
+                {run.timeline[mismatchAt ? mismatchAt - 1 : 0]?.t_rel.toFixed(1)}
+                s in
+              </span>
+            </div>
+            <div className="progress-track">
+              <i style={{ width: `${progress}%` }} />
+            </div>
+          </section>
+        )}
         <div className="workspace-grid">
           <section className="panel timeline-panel">
             <div className="panel-heading">
@@ -497,41 +601,57 @@ export function Dashboard() {
             </div>
             <Timeline
               events={run.timeline}
+              forkAt={hybrid?.fork_at}
               mismatchAt={mismatchAt}
               onSelect={selectFlow}
               selected={selectedSequence}
             />
           </section>
-          <section className="panel inspection-panel">
-            <div className="panel-heading">
-              <span>
-                <FileDiff size={15} />
-                Request comparison
-              </span>
-              <b>FLOW {selectedSequence ?? "—"}</b>
-            </div>
-            <div className="mismatch-callout">
-              <span>
-                <AlertTriangle size={14} />
-                Match key changed
-              </span>
-              <code>{run.explain?.match_key.slice(0, 12) ?? "unavailable"}…</code>
-            </div>
-            <TokenDiff live={liveBody} recorded={recordedBody} />
-            <NormalizationPanel explain={run.explain} />
-            <div className="diff-footer">
-              <span>
-                <i className="legend removed" /> recorded only
-              </span>
-              <span>
-                <i className="legend added" /> replay only
-              </span>
-              <button className="text-button" type="button">
-                Inspect raw request
-                <ArrowRight size={13} />
-              </button>
-            </div>
-          </section>
+          {hybrid ? (
+            <section className="panel inspection-panel hybrid-inspection">
+              <DownstreamCheck
+                onCompare={() => setModal("compare")}
+                onSave={() => {
+                  setDestination(`${selected}-hybrid`);
+                  setModal("record");
+                }}
+                result={hybrid}
+              />
+            </section>
+          ) : (
+            <section className="panel inspection-panel">
+              <div className="panel-heading">
+                <span>
+                  <FileDiff size={15} />
+                  Request comparison
+                </span>
+                <b>FLOW {selectedSequence ?? "—"}</b>
+              </div>
+              <div className="mismatch-callout">
+                <span>
+                  <AlertTriangle size={14} />
+                  Match key changed
+                </span>
+                <code>
+                  {run.explain?.match_key.slice(0, 12) ?? "unavailable"}…
+                </code>
+              </div>
+              <TokenDiff live={liveBody} recorded={recordedBody} />
+              <NormalizationPanel explain={run.explain} />
+              <div className="diff-footer">
+                <span>
+                  <i className="legend removed" /> recorded only
+                </span>
+                <span>
+                  <i className="legend added" /> replay only
+                </span>
+                <button className="text-button" type="button">
+                  Inspect raw request
+                  <ArrowRight size={13} />
+                </button>
+              </div>
+            </section>
+          )}
         </div>
       </main>
       {modal === "record" && (
@@ -581,6 +701,64 @@ export function Dashboard() {
         <Modal onClose={() => setModal(null)} title="Full matcher diff">
           <pre className="full-diff">
             {run.mismatch?.diff || "No textual matcher diff is available."}
+          </pre>
+        </Modal>
+      )}
+      {modal === "fork" && (
+        <Modal onClose={() => setModal(null)} title="Replay from fork point">
+          <div className="modal-body">
+            <p>
+              Flows before the boundary stay pinned. Every request after it
+              reaches the live network and is redacted before capture.
+            </p>
+            <label className="form-field">
+              <span>Fork after flow</span>
+              <input
+                max={cassette.flow_count}
+                min={0}
+                onChange={(event) => setForkAt(event.target.valueAsNumber)}
+                type="number"
+                value={forkAt}
+              />
+            </label>
+            <label className="form-field">
+              <span>Environment file</span>
+              <input
+                onChange={(event) => setEnvFile(event.target.value)}
+                placeholder="/absolute/path/to/.env"
+                value={envFile}
+              />
+            </label>
+          </div>
+          <div className="modal-actions">
+            <button
+              className="button secondary"
+              onClick={() => setModal(null)}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="button primary"
+              disabled={
+                running ||
+                !Number.isInteger(forkAt) ||
+                forkAt < 0 ||
+                forkAt > cassette.flow_count
+              }
+              onClick={replayFork}
+              type="button"
+            >
+              <GitFork size={14} />
+              Run hybrid replay
+            </button>
+          </div>
+        </Modal>
+      )}
+      {modal === "compare" && hybrid && (
+        <Modal onClose={() => setModal(null)} title="Full downstream comparison">
+          <pre className="full-diff">
+            {JSON.stringify(hybrid.downstream, null, 2)}
           </pre>
         </Modal>
       )}

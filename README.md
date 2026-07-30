@@ -910,7 +910,14 @@ after a successful run.
 
 The dashboard source lives in `ui/` and is a Vite-built React application. End
 users do not need Node: the production build copies its assets into the Python
-package. Contributors can verify the complete UI with:
+package. A completed fork is shown as pinned and live timeline segments, with
+live model-call duration, cost, and stream-chunk evidence. Its downstream score
+is deterministic and local: 60% multiset lexical overlap over the captured
+stdout transcript, 25% LCS-aligned tool-call similarity, and 15% exact output
+path/content/metadata overlap. The default pass threshold is 85%; this is not
+an LLM or semantic judge, and the component scores remain visible for review.
+
+Contributors can verify the complete UI with:
 
 ```sh
 cd ui

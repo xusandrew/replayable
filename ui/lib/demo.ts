@@ -123,4 +123,5 @@ export const demoRun: RunData = {
       preserve: [],
     },
   },
+  forkResult: null,
 };

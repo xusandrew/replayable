@@ -2,6 +2,7 @@ import type {
   CassetteSummary,
   Explain,
   FlowDetail,
+  ForkResult,
   Mismatch,
   TimelineEvent,
 } from "./types";
@@ -45,6 +46,10 @@ export function loadExplain(name: string, sequence: number): Promise<Explain> {
   );
 }
 
+export function loadForkResult(name: string): Promise<ForkResult> {
+  return request(`/api/cassettes/${encodeURIComponent(name)}/fork-result`);
+}
+
 export async function runReplay(name: string, strict: boolean): Promise<number> {
   const result = await request<{ exit_code: number }>(
     `/api/cassettes/${encodeURIComponent(name)}/replay`,
@@ -69,6 +74,25 @@ export async function recordFreshBaseline(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         destination,
+        env_file: envFile || null,
+      }),
+    },
+  );
+  return result.exit_code;
+}
+
+export async function runFork(
+  name: string,
+  forkAt: number,
+  envFile: string,
+): Promise<number> {
+  const result = await request<{ exit_code: number }>(
+    `/api/cassettes/${encodeURIComponent(name)}/fork`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        fork_at: forkAt,
         env_file: envFile || null,
       }),
     },
