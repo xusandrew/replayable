@@ -158,6 +158,178 @@ def test_replay_restores_nonsecret_env_and_dummies_secret_env(
     assert "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1" in observed
 
 
+def test_fork_at_end_preserves_baseline_and_writes_verified_result(tmp_path, ca_file, proxy_stub):
+    cassette = tmp_path / "cassette"
+    writer = CassetteWriter(cassette)
+    writer.initialize(stub_manifest())
+    workspace = tmp_path / "empty"
+    workspace.mkdir()
+    snapshot = create_snapshot(workspace, cassette)
+    (cassette / "agent.stdout").write_bytes(b"")
+    (cassette / "agent.stderr").write_bytes(b"")
+    writer.update_manifest(
+        workspace_sha256=snapshot.sha256,
+        stdout_sha256=("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        stderr_sha256=("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        record_exit_code=0,
+        record_wall_time_seconds=0.0,
+    )
+    baseline_manifest = (cassette / "manifest.json").read_bytes()
+    baseline_flows = (cassette / "flows.jsonl").read_bytes()
+
+    context = RunContext(
+        proxy_process=proxy_stub(
+            REPLAYABLE_STATE_FILE=json.dumps(
+                {
+                    "unconsumed_sequences": [],
+                    "pinned_target": 0,
+                    "pinned_served": 0,
+                    "live_requests": 0,
+                    "live_responses": 0,
+                    "live_errors": 0,
+                    "live_started_epoch": None,
+                    "live_completed_epoch": None,
+                }
+            )
+        ),
+        run_container=lambda _command, **_kwargs: 0,
+        select_replay_image=lambda **_kwargs: "sha256:image",
+    )
+
+    assert (
+        replay_run(
+            cassette=cassette,
+            fork_at=0,
+            ca_path=ca_file,
+            context=context,
+        )
+        == ExitCode.SUCCESS
+    )
+    result = json.loads((cassette / "fork-result.json").read_text(encoding="utf-8"))
+    assert result["exit_code"] == ExitCode.SUCCESS
+    assert result["segments"]["pinned"]["served_flow_count"] == 0
+    assert result["segments"]["live"]["flow_count"] == 0
+    assert result["downstream"]["matches"] is True
+    assert (cassette / "manifest.json").read_bytes() == baseline_manifest
+    assert (cassette / "flows.jsonl").read_bytes() == baseline_flows
+
+
+def test_fork_keeps_live_secret_out_of_process_arguments(
+    tmp_path, ca_file, proxy_stub
+):
+    cassette = tmp_path / "cassette"
+    writer = CassetteWriter(cassette)
+    writer.initialize(
+        stub_manifest(
+            env_names=["ANTHROPIC_API_KEY"],
+            secret_env_names=["ANTHROPIC_API_KEY"],
+            nonsecret_env={},
+        )
+    )
+    workspace = tmp_path / "empty"
+    workspace.mkdir()
+    snapshot = create_snapshot(workspace, cassette)
+    (cassette / "agent.stdout").write_bytes(b"")
+    (cassette / "agent.stderr").write_bytes(b"")
+    empty_sha = (
+        "e3b0c44298fc1c149afbf4c8996fb924"
+        "27ae41e4649b934ca495991b7852b855"
+    )
+    writer.update_manifest(
+        workspace_sha256=snapshot.sha256,
+        stdout_sha256=empty_sha,
+        stderr_sha256=empty_sha,
+        record_exit_code=0,
+        record_wall_time_seconds=0.0,
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("ANTHROPIC_API_KEY=literal-secret\n", encoding="utf-8")
+    observed: list[str] = []
+
+    def fake_run(command, **_kwargs):
+        observed.extend(command)
+        return 0
+
+    context = RunContext(
+        proxy_process=proxy_stub(
+            REPLAYABLE_STATE_FILE=json.dumps(
+                {
+                    "unconsumed_sequences": [],
+                    "pinned_target": 0,
+                    "pinned_served": 0,
+                    "live_requests": 0,
+                    "live_responses": 0,
+                    "live_errors": 0,
+                    "live_started_epoch": None,
+                    "live_completed_epoch": None,
+                }
+            )
+        ),
+        run_container=fake_run,
+        select_replay_image=lambda **_kwargs: "sha256:image",
+    )
+
+    assert (
+        replay_run(
+            cassette=cassette,
+            fork_at=0,
+            env_file=env_file,
+            ca_path=ca_file,
+            context=context,
+        )
+        == ExitCode.SUCCESS
+    )
+    assert str(env_file.resolve()) in observed
+    assert not any("literal-secret" in argument for argument in observed)
+
+
+def test_live_fork_requires_recorded_secrets_before_start(tmp_path, ca_file):
+    cassette = tmp_path / "cassette"
+    writer = CassetteWriter(cassette)
+    writer.initialize(
+        stub_manifest(
+            env_names=["ANTHROPIC_API_KEY"],
+            secret_env_names=["ANTHROPIC_API_KEY"],
+            nonsecret_env={},
+        )
+    )
+    writer.append_flow(
+        {
+            "seq": 1,
+            "key": {
+                "method": "GET",
+                "host": "example.test",
+                "port": 443,
+                "path": "/",
+            },
+            "request": {
+                "query": "",
+                "headers": [],
+                "body": {"inline_utf8": ""},
+                "body_sha256": ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "body": {"inline_utf8": ""},
+                "body_sha256": ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            },
+            "timing": {"started": 0.0, "completed": 0.0},
+        }
+    )
+    writer.update_manifest(flow_count=1, event_count=1)
+
+    with pytest.raises(HarnessError, match=r"live fork requires.*ANTHROPIC_API_KEY"):
+        replay_run(
+            cassette=cassette,
+            fork_at=0,
+            ca_path=ca_file,
+            context=RunContext(
+                select_replay_image=lambda **_kwargs: "sha256:image",
+            ),
+        )
+
+
 def test_proxy_is_terminated_when_container_work_raises(monkeypatch, tmp_path):
     addon = tmp_path / "addon.py"
     addon.write_text("", encoding="utf-8")

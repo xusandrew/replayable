@@ -92,6 +92,21 @@ def replay(
         bool,
         typer.Option("--strict", help="Treat unconsumed flows as a mismatch."),
     ] = False,
+    fork_at: Annotated[
+        int | None,
+        typer.Option(
+            "--fork-at",
+            min=0,
+            help="Serve N recorded flows, then continue against the live upstream.",
+        ),
+    ] = None,
+    env_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--env-file",
+            help="Recorded secrets required for the live part of a fork.",
+        ),
+    ] = None,
     out_workspace: Annotated[
         Path | None,
         typer.Option("--out-workspace", help="Directory for the replay workspace."),
@@ -116,11 +131,13 @@ def replay(
         typer.Option("--timeout", help="Kill the container after this many seconds."),
     ] = None,
 ) -> None:
-    """Replay a recorded container run without upstream network access."""
+    """Replay offline, or fork to live traffic after a recorded prefix."""
     try:
         exit_code = replay_run(
             cassette=cassette,
             strict=strict,
+            fork_at=fork_at,
+            env_file=env_file,
             out_workspace=out_workspace,
             allow_image_mismatch=allow_image_mismatch,
             port=port,

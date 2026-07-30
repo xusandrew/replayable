@@ -9,6 +9,7 @@ from datetime import datetime
 
 from mitmproxy import certs, http
 
+from replayable.addons.fork_addon import ForkReplayAddon
 from replayable.addons.record_addon import RecordAddon
 from replayable.addons.replay_addon import (
     LEAF_CERT_VALIDITY,
@@ -173,6 +174,116 @@ def test_replay_addon_serves_duplicate_requests_fifo_byte_identically(tmp_path):
     assert first.response.raw_content == b"first\n"
     assert second.response.raw_content == b"second\n"
     assert second.response.headers["x-recorded"] == "yes"
+
+
+def test_fork_addon_serves_exact_prefix_then_captures_live_without_mutating_baseline(
+    tmp_path,
+):
+    baseline = tmp_path / "baseline"
+    capture = tmp_path / "capture"
+    initialize_cassette(baseline)
+    initialize_cassette(capture)
+    recorder = RecordAddon(baseline, {})
+    recorder.response(make_flow("GET", "https://api.github.com/zen", response_body=b"pinned\n"))
+    recorder.response(make_flow("GET", "https://example.test/live", response_body=b"recorded\n"))
+
+    fork = ForkReplayAddon(
+        baseline,
+        capture,
+        tmp_path / "fork-report.json",
+        tmp_path / "fork-state.json",
+        fork_at=1,
+        secrets={},
+    )
+    fork.load(None)
+    pinned = make_flow("GET", "https://api.github.com/zen")
+    live = make_flow("GET", "https://example.test/live")
+
+    fork.request(pinned)
+    fork.request(live)
+    assert pinned.response.raw_content == b"pinned\n"
+    assert live.response is None
+
+    live.response = http.Response.make(200, b"fresh\n")
+    fork.response(live)
+    fork.done()
+
+    assert len(CassetteReader(baseline).load_flows().flows) == 2
+    captured = CassetteReader(capture).load_flows().flows
+    assert len(captured) == 1
+    assert captured[0]["key"]["host"] == "example.test"
+    assert CassetteReader(capture).read_body(captured[0]["response"]["body"]) == b"fresh\n"
+    state = json.loads((tmp_path / "fork-state.json").read_text(encoding="utf-8"))
+    assert state["pinned_served"] == 1
+    assert state["live_requests"] == 1
+    assert state["live_responses"] == 1
+    assert state["live_errors"] == 0
+
+
+def test_fork_addon_never_switches_live_before_pinned_prefix_matches(tmp_path):
+    baseline = tmp_path / "baseline"
+    capture = tmp_path / "capture"
+    initialize_cassette(baseline)
+    initialize_cassette(capture)
+    RecordAddon(baseline, {}).response(
+        make_flow("GET", "https://api.github.com/zen", response_body=b"pinned\n")
+    )
+    fork = ForkReplayAddon(
+        baseline,
+        capture,
+        tmp_path / "fork-report.json",
+        tmp_path / "fork-state.json",
+        fork_at=1,
+        secrets={},
+    )
+    fork.load(None)
+    divergent = make_flow("GET", "https://example.test/live")
+
+    fork.request(divergent)
+
+    assert divergent.response.status_code == 599
+    assert CassetteReader(capture).load_flows().flows == []
+    state = json.loads((tmp_path / "fork-state.json").read_text(encoding="utf-8"))
+    assert state["pinned_served"] == 0
+    assert state["live_requests"] == 0
+
+
+def test_fork_mismatch_report_redacts_live_secret_values(tmp_path):
+    baseline = tmp_path / "baseline"
+    capture = tmp_path / "capture"
+    initialize_cassette(baseline)
+    initialize_cassette(capture)
+    RecordAddon(baseline, {}).response(
+        make_flow(
+            "POST",
+            "https://api.example.test/v1",
+            request_body=b'{"prompt":"recorded"}',
+            response_body=b"ok",
+            content_type="application/json",
+        )
+    )
+    fork = ForkReplayAddon(
+        baseline,
+        capture,
+        tmp_path / "fork-report.json",
+        tmp_path / "fork-state.json",
+        fork_at=1,
+        secrets={"API_TOKEN": "harmful-secret"},
+    )
+    fork.load(None)
+    divergent = make_flow(
+        "POST",
+        "https://api.example.test/v1",
+        request_body=b'{"prompt":"harmful-secret"}',
+        content_type="application/json",
+    )
+    divergent.request.headers["content-type"] = "application/json"
+
+    fork.request(divergent)
+
+    report = (tmp_path / "fork-report.json").read_text(encoding="utf-8")
+    assert "harmful-secret" not in report
+    assert "[REDACTED:API_TOKEN]" in report
 
 
 def test_sse_stream_callback_preserves_chunks_and_hashes_concatenation(tmp_path):

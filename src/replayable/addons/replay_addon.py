@@ -73,11 +73,13 @@ class ReplayAddon:
         report_path: Path | None = None,
         state_path: Path | None = None,
         rules_path: Path | None = None,
+        flow_limit: int | None = None,
     ) -> None:
         self.cassette_directory = cassette_directory
         self.report_path = report_path
         self.state_path = state_path
         self.rules_path = rules_path
+        self.flow_limit = flow_limit
         self.reader: CassetteReader | None = None
         self.matcher: RequestMatcher | None = None
 
@@ -101,6 +103,14 @@ class ReplayAddon:
         if _loader is not None:
             _pin_leaf_certificate_validity(float(manifest["t0_epoch"]))
         flows = self.reader.load_flows().flows
+        if self.flow_limit is not None:
+            if (
+                isinstance(self.flow_limit, bool)
+                or not isinstance(self.flow_limit, int)
+                or not 0 <= self.flow_limit <= len(flows)
+            ):
+                raise RuntimeError(f"flow limit must be between 0 and {len(flows)}")
+            flows = flows[: self.flow_limit]
         rules = load_rules(self.rules_path)
         recorded_ruleset = manifest.get("ruleset_version")
         if recorded_ruleset is not None and recorded_ruleset != rules.version:

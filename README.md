@@ -635,6 +635,29 @@ uv run pytest tests/test_runner.py::test_replay_reports_unconsumed_flows -v
 ```
 
 
+### Fork / hybrid replay
+
+`--fork-at N` serves recorded flows `[0, N)` and then resumes upstream
+network access. The original cassette remains immutable; the run writes
+`fork-result.json` with pinned/live counts, live usage and cost, timing, and
+downstream transcript, workspace, exit-code, and tool-sequence comparisons.
+
+Live forks require an environment file containing every secret name recorded
+in the cassette. Replayable rejects new variables and changed non-secret
+values, passes secrets through a private file to the redacting recorder, and
+never stores their literal values:
+
+```sh
+uv run replayable replay \
+  --cassette ./cassettes/your-cassette \
+  --fork-at 3 \
+  --env-file ./.env
+```
+
+`N=0` makes every request live. `N=flow_count` still requires credentials:
+an unexpected request after the recorded end is live by definition.
+
+
 
 ### SSE recording and replay
 
@@ -843,6 +866,8 @@ If `--out` is omitted, the output directory is `./cassette`.
 ```text
 replayable replay --cassette CASSETTE_DIR
                   [--strict]
+                  [--fork-at N]
+                  [--env-file FILE]
                   [--out-workspace DIR]
                   [--allow-image-mismatch]
                   [--port PORT]
