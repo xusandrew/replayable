@@ -1,13 +1,13 @@
 import { expect, test } from "@playwright/test";
+import { captureBrowserErrors } from "./browser-errors";
 
 test("shows a real cassette mismatch as the offline Screen A dashboard", async ({
   page,
 }) => {
-  const browserErrors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(message.text());
-  });
-  page.on("pageerror", (error) => browserErrors.push(error.message));
+  const browserErrors = captureBrowserErrors(
+    page,
+    new Set(["/api/cassettes/research-agent/fork-result"]),
+  );
 
   await page.route("**/api/cassettes", async (route) => {
     await route.fulfill({

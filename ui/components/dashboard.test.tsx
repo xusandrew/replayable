@@ -7,7 +7,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "./dashboard";
-import { eventState } from "./timeline";
+import { demoRun } from "@/lib/demo";
+import { eventState, hybridTimeline } from "./timeline";
 import { TokenDiff } from "./token-diff";
 
 afterEach(() => {
@@ -39,6 +40,12 @@ describe("timeline state", () => {
     expect(eventState(3, 3)).toBe("mismatch");
     expect(eventState(4, 3)).toBe("not-reached");
     expect(eventState(4, null)).toBe("served");
+  });
+
+  it("never presents an uncaptured baseline suffix as live", () => {
+    const events = hybridTimeline(demoRun.timeline, 3, []);
+
+    expect(events.map((event) => event.seq)).toEqual([1, 2, 3]);
   });
 });
 

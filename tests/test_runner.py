@@ -134,6 +134,7 @@ def test_replay_restores_nonsecret_env_and_dummies_secret_env(
     workspace.mkdir()
     create_snapshot(workspace, cassette)
     (cassette / "agent.stdout").write_bytes(b"")
+    (cassette / "fork-result.json").write_text("{}", encoding="utf-8")
     observed: list[str] = []
 
     def fake_run(command, **_kwargs):
@@ -156,6 +157,7 @@ def test_replay_restores_nonsecret_env_and_dummies_secret_env(
     assert "MODEL=claude-haiku-4-5" in observed
     assert "PYTHONHASHSEED=0" in observed
     assert "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1" in observed
+    assert not (cassette / "fork-result.json").exists()
 
 
 def test_fork_at_end_preserves_baseline_and_writes_verified_result(tmp_path, ca_file, proxy_stub):
