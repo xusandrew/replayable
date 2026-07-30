@@ -46,6 +46,9 @@ def test_record_replay_and_missing_flow(
     assert record_result == ExitCode.SUCCESS
     reader = CassetteReader(cassette)
     manifest = reader.load_manifest()
+    observation = json.loads(
+        (cassette / "observation.json").read_text(encoding="utf-8")
+    )
     records = reader.load_flows().flows
     assert manifest["cassette_version"] == "2.0"
     assert manifest["flow_count"] == 4
@@ -66,6 +69,9 @@ def test_record_replay_and_missing_flow(
         },
     ]
     assert manifest["image"]["ref"] == "replayable/agent-base:local"
+    assert observation["process"]["exit_code"] == 0
+    assert observation["model"]["calls"] == 0
+    assert observation["workspace"]["sha256"] == manifest["workspace_sha256"]
     assert len(records) == 4
     assert len(EventLogReader(cassette).load_events()) == 4
     assert [

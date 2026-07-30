@@ -1,0 +1,51 @@
+{
+  "model": {
+    "calls": 1,
+    "cost_complete": true,
+    "estimated_cost_usd": 0.00012,
+    "models": [
+      "claude-haiku-4-5"
+    ],
+    "tokens": {
+      "cache_read": 3,
+      "cache_write": 2,
+      "input": 10,
+      "output": 20
+    },
+    "usage_complete": true
+  },
+  "process": {
+    "exit_code": 0
+  },
+  "timing": {
+    "wall_time_seconds": 1.25
+  },
+  "tool_calls": [
+    {
+      "id": "tool-1",
+      "input": {
+        "query": "replay"
+      },
+      "name": "search"
+    }
+  ],
+  "transcript": {
+    "stderr": "",
+    "stderr_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "stdout": "done\n",
+    "stdout_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "version": 1,
+  "workspace": {
+    "files": [
+      {
+        "mode": "0644",
+        "path": "report.md",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "size": 4,
+        "type": "file"
+      }
+    ],
+    "sha256": "72bd67c68b499f79ee72551e98acc72f2c01cedc94bf7a02d9ba99e2d561295d"
+  }
+}
