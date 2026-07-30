@@ -16,6 +16,7 @@ from replayable.core.docker import (
     docker_command,
     replay_time_environment,
 )
+from replayable.core.policy import PolicyMode
 from replayable.core.proxy import proxy_process
 from replayable.exit_codes import ExitCode
 from replayable.inspection import explain_match, inspect_cassette
@@ -441,6 +442,24 @@ def test_replay_refuses_v2_event_count_mismatch(tmp_path):
         replay_run(cassette=cassette)
 
 
+def test_replay_refuses_tampered_policy_before_runtime(tmp_path):
+    cassette = tmp_path / "cassette"
+    writer = CassetteWriter(cassette)
+    writer.initialize(
+        stub_manifest(
+            policy={
+                "version": 1,
+                "hash": "sha256:not-the-content-hash",
+                "config": {"channels": {"network": "freeze"}, "scopes": []},
+                "resolved": [],
+            }
+        )
+    )
+
+    with pytest.raises(HarnessError, match="policy hash"):
+        replay_run(cassette=cassette)
+
+
 def test_record_pins_project_rules_in_cassette_manifest(monkeypatch, tmp_path, ca_file):
     rules_path = tmp_path / "replayable.toml"
     rules_path.write_text(
@@ -474,6 +493,9 @@ def test_record_pins_project_rules_in_cassette_manifest(monkeypatch, tmp_path, c
         rules_path.read_text(encoding="utf-8")
     )
     assert manifest["ruleset_version"] == load_rules(rules_path).version
+    assert manifest["policy"]["hash"].startswith("sha256:")
+    assert manifest["policy"]["config"]["channels"]["network"] == PolicyMode.FREEZE
+    assert manifest["policy"]["resolved"] == []
 
 
 def test_explain_match_renders_prehash_and_normalized_body(tmp_path):

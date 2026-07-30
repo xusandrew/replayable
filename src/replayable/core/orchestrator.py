@@ -29,6 +29,13 @@ from replayable.core import ca as ca_core
 from replayable.core import container as container_core
 from replayable.core import docker as docker_core
 from replayable.core import proxy as proxy_core
+from replayable.core.policy import (
+    PolicyError,
+    build_policy_manifest,
+    load_policy,
+    resolve_policy,
+    validate_policy_manifest,
+)
 from replayable.errors import HarnessError
 from replayable.exit_codes import ExitCode
 from replayable.normalize_rules import (
@@ -234,6 +241,10 @@ def record_run(
         secret_name_overrides = load_secret_name_overrides(project_rules_path)
     except SecretConfigError as exc:
         raise HarnessError(f"secret overrides are invalid: {exc}") from exc
+    try:
+        policy = load_policy(project_rules_path)
+    except PolicyError as exc:
+        raise HarnessError(f"policy configuration is invalid: {exc}") from exc
     classified_secret_names = secret_names(
         user_environment,
         extra_names=secret_name_overrides,
@@ -347,6 +358,13 @@ def record_run(
         loaded = CassetteReader(out).load_flows()
         events = EventLogReader(out).load_events()
         _validate_network_events(events, loaded.flows)
+        network_scopes = sorted(
+            {event.scope for event in events if event.kind is EventKind.HTTP_EXCHANGE}
+        )
+        resolved_policy = [
+            resolve_policy(policy, channel="network", scope=scope)
+            for scope in network_scopes
+        ]
         writer.update_manifest(
             flow_count=len(loaded.flows),
             event_count=len(events),
@@ -354,8 +372,9 @@ def record_run(
             workspace_sha256=workspace_snapshot.sha256,
             stdout_sha256=_sha256_path(out / AGENT_STDOUT_FILE_NAME),
             stderr_sha256=_sha256_path(out / AGENT_STDERR_FILE_NAME),
+            policy=build_policy_manifest(policy, resolved_policy),
         )
-    except CassetteError as exc:
+    except (CassetteError, PolicyError) as exc:
         raise HarnessError(f"recorded cassette is invalid: {exc}") from exc
     _log_event(run_log, "record_complete", flow_count=len(loaded.flows))
     return ExitCode.SUCCESS if return_code == 0 else ExitCode.AGENT_FAILED
@@ -385,6 +404,7 @@ def replay_run(
         reader = CassetteReader(cassette)
         manifest = reader.load_manifest()
         loaded = reader.load_flows()
+        pinned_policy = validate_policy_manifest(manifest)
         declared_flow_count = manifest.get("flow_count")
         if (
             isinstance(declared_flow_count, bool)
@@ -406,6 +426,21 @@ def replay_run(
                     "manifest event_count does not match the native event log"
                 )
             _validate_network_events(events, loaded.flows)
+            if pinned_policy is not None:
+                _config, resolutions = pinned_policy
+                resolved_scopes = {
+                    (resolution.channel.value, resolution.scope)
+                    for resolution in resolutions
+                }
+                recorded_scopes = {
+                    (event.channel.value, event.scope)
+                    for event in events
+                    if event.kind is EventKind.HTTP_EXCHANGE
+                }
+                if not recorded_scopes.issubset(resolved_scopes):
+                    raise PolicyError(
+                        "manifest policy does not resolve every recorded network scope"
+                    )
         image_ref = manifest["image"]["ref"]
         image_digest = manifest["image"]["digest"]
         image_id = manifest["image"].get("id", image_digest)
@@ -419,7 +454,7 @@ def replay_run(
             or not all(isinstance(item, str) for item in command)
         ):
             raise CassetteError("manifest image, digest, or command is invalid")
-    except (CassetteError, KeyError, TypeError, ValueError) as exc:
+    except (CassetteError, PolicyError, KeyError, TypeError, ValueError) as exc:
         raise HarnessError(f"cassette cannot be replayed: {exc}") from exc
     # The cassette is self-describing: only a rules file pinned inside it may
     # apply. A replayable.toml in the current directory must not change how a
