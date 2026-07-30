@@ -12,7 +12,10 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    include: ["components/**/*.test.tsx"],
+    // Anything ending in .test.ts(x) outside the Playwright suite runs. The
+    // previous `components/**/*.test.tsx` glob silently skipped every test
+    // under lib/, which is where the pure logic lives.
+    include: ["{components,lib}/**/*.test.{ts,tsx}"],
     setupFiles: ["./vitest.setup.ts"],
   },
 });

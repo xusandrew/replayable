@@ -23,7 +23,7 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listCassettes,
   loadExplain,
@@ -36,13 +36,12 @@ import {
   runReplay,
 } from "@/lib/api";
 import { demoCassettes, demoRun } from "@/lib/demo";
+import { changedFields, diffPanes } from "@/lib/normalized-body";
 import type {
   CassetteSummary,
   Explain,
-  FlowDetail,
   Mismatch,
   RunData,
-  TimelineEvent,
 } from "@/lib/types";
 import { hybridTimeline, Timeline } from "./timeline";
 import { TokenDiff } from "./token-diff";
@@ -65,6 +64,16 @@ async function optional<T>(operation: Promise<T>): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+function emptyRun(): RunData {
+  return {
+    timeline: [],
+    mismatch: null,
+    flow: null,
+    explain: null,
+    forkResult: null,
+  };
 }
 
 function Sidebar({
@@ -212,10 +221,12 @@ function RunHeader({
 function BehaviorBanner({
   mismatchAt,
   served,
+  total,
   onViewDiff,
 }: {
-  mismatchAt: number;
+  mismatchAt: number | null;
   served: number;
+  total: number;
   onViewDiff: () => void;
 }) {
   return (
@@ -226,14 +237,21 @@ function BehaviorBanner({
       <span className="banner-copy">
         <strong>Behavior changed</strong>
         <span>
-          Replay stopped at flow {mismatchAt}. The outgoing model request no
-          longer matches the recorded baseline.
+          {mismatchAt === null
+            ? "Replay emitted an outgoing request, but this cassette has no recorded candidate to compare."
+            : `Replay stopped at flow ${mismatchAt}. The outgoing model request no longer matches the recorded baseline.`}
         </span>
       </span>
       <span className="banner-stats">
         <b>exit 2</b>
-        <span>mismatch at flow {mismatchAt}</span>
-        <span>{served}/7 served</span>
+        <span>
+          {mismatchAt === null
+            ? "no recorded candidate"
+            : `mismatch at flow ${mismatchAt}`}
+        </span>
+        <span>
+          {served}/{total} served
+        </span>
       </span>
       <button
         className="button banner-button"
@@ -326,7 +344,13 @@ function Modal({
   );
 }
 
-function NormalizationPanel({ explain }: { explain: Explain | null }) {
+function NormalizationPanel({
+  explain,
+  changed,
+}: {
+  explain: Explain | null;
+  changed: string[];
+}) {
   if (!explain) return null;
   const fields = explain.rules.field_names.slice(0, 5);
   return (
@@ -346,10 +370,14 @@ function NormalizationPanel({ explain }: { explain: Explain | null }) {
             {field} ignored
           </span>
         ))}
-        <span className="rule-badge changed">
-          <X size={11} />
-          system changed
-        </span>
+        {/* Derived from the two normalized bodies, so the badge names the field
+            that actually survived normalization and still differs. */}
+        {changed.slice(0, 5).map((field) => (
+          <span className="rule-badge changed" key={field}>
+            <X size={11} />
+            {field} changed
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -359,6 +387,10 @@ export function Dashboard() {
   const [cassettes, setCassettes] = useState<CassetteSummary[]>(demoCassettes);
   const [selected, setSelected] = useState(demoCassettes[0].name);
   const [run, setRun] = useState<RunData>(demoRun);
+  // Everything on screen is fabricated until the local API answers. Saying so
+  // is not optional: the whole point of this dashboard is that the badges
+  // reflect a real matcher decision.
+  const [live, setLive] = useState(false);
   const [strict, setStrict] = useState(true);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -369,11 +401,21 @@ export function Dashboard() {
   const [replaceBaseline, setReplaceBaseline] = useState(false);
   const [envFile, setEnvFile] = useState("");
   const [forkAt, setForkAt] = useState(3);
+  // Two independent generations. Sharing one counter meant a timeline click
+  // (`selectFlow`) superseded an in-flight `loadRun`, so the run refresh after
+  // a replay was silently discarded and the panel kept showing the old result.
+  // `loadRun` bumps both, so a stale flow response can never land on a newer
+  // cassette's run.
+  const runRequest = useRef(0);
+  const flowRequest = useRef(0);
 
   const loadRun = useCallback(async (name: string) => {
+    const request = ++runRequest.current;
+    const flowGeneration = ++flowRequest.current;
     const timeline = await optional(loadTimeline(name));
     if (!timeline) {
-      setRun(demoRun);
+      // Never dress a real cassette in another run's fabricated mismatch.
+      if (request === runRequest.current) setRun(emptyRun());
       return;
     }
     const [mismatch, forkResult] = await Promise.all([
@@ -388,13 +430,24 @@ export function Dashboard() {
     const effectiveTimeline = forkResult
       ? hybridTimeline(timeline, forkResult.fork_at, forkResult.events)
       : timeline;
-    setRun({
+    // A slower response for a previously selected cassette must not overwrite
+    // the run that is currently on screen.
+    if (request !== runRequest.current) return;
+    setRun((current) => ({
       timeline: effectiveTimeline,
       mismatch,
-      flow,
-      explain,
+      // A flow click that started after this refresh is the newer selection.
+      // Preserve it while still applying the refreshed run-level artifacts.
+      flow:
+        flowGeneration === flowRequest.current
+          ? flow
+          : current.flow,
+      explain:
+        flowGeneration === flowRequest.current
+          ? explain
+          : current.explain,
       forkResult,
-    });
+    }));
   }, []);
 
   useEffect(() => {
@@ -402,6 +455,7 @@ export function Dashboard() {
     listCassettes()
       .then((items) => {
         if (!active || items.length === 0) return;
+        setLive(true);
         setCassettes(items);
         setSelected(items[0].name);
         return loadRun(items[0].name);
@@ -418,19 +472,31 @@ export function Dashboard() {
   const cassette =
     cassettes.find((item) => item.name === selected) ?? cassettes[0];
   const mismatchAt = mismatchSequence(run.mismatch);
+  const hasMismatch = run.mismatch !== null;
   const hybrid = run.forkResult;
-  const served = mismatchAt === null ? run.timeline.length : mismatchAt - 1;
+  const served =
+    mismatchAt === null
+      ? hasMismatch
+        ? 0
+        : run.timeline.length
+      : mismatchAt - 1;
   const progress = Math.round((served / Math.max(run.timeline.length, 1)) * 100);
   const selectedSequence = run.flow?.seq ?? mismatchAt;
 
-  const liveBody =
-    run.mismatch?.live_request.canonical_body ?? run.flow?.request.body_decoded ?? "";
-  const recordedBody = run.flow?.request.body_decoded ?? "";
+  // Both panes must be the matcher's own view of the request; see lib/normalized-body.
+  const panes = diffPanes(run.flow, run.mismatch, run.explain);
+  const changed = panes.normalized
+    ? changedFields(panes.recorded, panes.live)
+    : [];
+  // No mismatch report means the matcher served this flow: a pass, not an
+  // absence of information.
+  const matched = !hasMismatch;
 
   const selectCassette = useCallback(
     (name: string) => {
       setSelected(name);
       setNotice(null);
+      setRun(emptyRun());
       void loadRun(name);
     },
     [loadRun],
@@ -438,10 +504,14 @@ export function Dashboard() {
 
   const selectFlow = useCallback(
     async (sequence: number) => {
+      // Only the flow generation: selecting a flow must not cancel a run that
+      // is still loading.
+      const request = ++flowRequest.current;
       const [flow, explain] = await Promise.all([
         optional(loadFlow(selected, sequence)),
         optional(loadExplain(selected, sequence)),
       ]);
+      if (request !== flowRequest.current) return;
       setRun((current) => ({
         ...current,
         flow: flow ?? current.flow,
@@ -551,6 +621,13 @@ export function Dashboard() {
           setStrict={setStrict}
           strict={strict}
         />
+        {!live && (
+          <div className="notice demo-notice" role="status">
+            <AlertTriangle size={14} />
+            Sample data — the local API is not reachable. Start it with{" "}
+            <code>replayable ui --allow-write</code> to inspect real cassettes.
+          </div>
+        )}
         {notice && (
           <div className="notice" role="status">
             <Activity size={14} />
@@ -568,15 +645,16 @@ export function Dashboard() {
           </span>
           <span>
             <ShieldCheck size={13} />
-            exact image
+            {cassette.image.ref}
           </span>
         </div>
         {hybrid && <HybridSummary result={hybrid} />}
-        {!hybrid && mismatchAt !== null && (
+        {!hybrid && hasMismatch && (
           <BehaviorBanner
             mismatchAt={mismatchAt}
             onViewDiff={() => setModal("diff")}
             served={served}
+            total={run.timeline.length}
           />
         )}
         {!hybrid && (
@@ -588,13 +666,19 @@ export function Dashboard() {
                 </strong>{" "}
                 flows served
               </span>
+              {/* "stopped" only makes sense when the replay actually stopped;
+                  a clean run reached the end of the cassette. */}
               <span>
-                stopped{" "}
-                {run.timeline[mismatchAt ? mismatchAt - 1 : 0]?.t_rel.toFixed(1)}
-                s in
+                {!hasMismatch
+                  ? "completed the cassette"
+                  : mismatchAt === null
+                    ? "stopped on an unmatched request"
+                  : `stopped ${
+                      run.timeline[mismatchAt - 1]?.t_rel.toFixed(1) ?? "0.0"
+                    }s in`}
               </span>
             </div>
-            <div className="progress-track">
+            <div className={`progress-track ${matched ? "matched" : ""}`}>
               <i style={{ width: `${progress}%` }} />
             </div>
           </section>
@@ -637,24 +721,49 @@ export function Dashboard() {
                 </span>
                 <b>FLOW {selectedSequence ?? "—"}</b>
               </div>
-              <div className="mismatch-callout">
+              {/* A run with no mismatch is a *pass*. Alert-red styling and a
+                  warning triangle would invert the demo's whole signal in the
+                  one panel that explains the matcher's decision. */}
+              <div className={`mismatch-callout ${matched ? "matched" : ""}`}>
                 <span>
-                  <AlertTriangle size={14} />
-                  Match key changed
+                  {matched ? <Check size={14} /> : <AlertTriangle size={14} />}
+                  {matched
+                    ? "Request matched the recording"
+                    : run.explain
+                      ? "Match key changed"
+                      : run.flow
+                        ? // The recorded request exists; only its normalization
+                          // is missing. Do not report it as absent.
+                          "Normalization unavailable"
+                        : "No recorded candidate"}
                 </span>
                 <code>
                   {run.explain?.match_key.slice(0, 12) ?? "unavailable"}…
                 </code>
               </div>
-              <TokenDiff live={liveBody} recorded={recordedBody} />
-              <NormalizationPanel explain={run.explain} />
+              {/* On a pass the harness never captured a replay request body —
+                  the matcher only proved the normalized keys were equal. Show
+                  the recorded request once instead of labelling recorded bytes
+                  "Replay request". */}
+              <TokenDiff
+                comparable={panes.comparable ?? true}
+                live={panes.live}
+                normalized={panes.normalized}
+                recorded={panes.recorded}
+                single={matched}
+              />
+              <NormalizationPanel changed={changed} explain={run.explain} />
               <div className="diff-footer">
-                <span>
-                  <i className="legend removed" /> recorded only
-                </span>
-                <span>
-                  <i className="legend added" /> replay only
-                </span>
+                {!matched && (
+                  <>
+                    <span>
+                      <i className="legend removed" /> recorded only
+                    </span>
+                    <span>
+                      <i className="legend added" /> replay only
+                    </span>
+                  </>
+                )}
                 <button className="text-button" type="button">
                   Inspect raw request
                   <ArrowRight size={13} />

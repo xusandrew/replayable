@@ -474,6 +474,20 @@ button {
   padding: 8px 26px;
 }
 
+/* Sample data must never be mistaken for a real run. */
+.notice.demo-notice {
+  background: #221a0d;
+  border-bottom: 1px solid #4a3a17;
+  color: #f0c274;
+}
+
+.notice.demo-notice code {
+  background: #2f2410;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 1px 5px;
+}
+
 .run-meta-bar {
   align-items: center;
   border-bottom: 1px solid var(--border);
@@ -671,10 +685,16 @@ button {
   overflow: hidden;
 }
 
+/* Red is the "replay stopped here" signal. A run that served every flow is a
+   pass and must not be drawn in the failure colour. */
 .progress-track i {
   background: var(--red);
   display: block;
   height: 100%;
+}
+
+.progress-track.matched i {
+  background: var(--mint);
 }
 
 .workspace-grid {
@@ -1030,6 +1050,19 @@ button {
   margin: 0;
 }
 
+.score-copy p.gate-note {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-top: 4px;
+}
+
+.score-copy p.gate-note.pass {
+  color: var(--mint);
+}
+
+.score-copy p.gate-note.fail {
+  color: var(--red);
+}
+
 .score-components {
   border-bottom: 1px solid var(--border);
   border-top: 1px solid var(--border);
@@ -1174,6 +1207,17 @@ button {
   padding: 0 13px;
 }
 
+/* Green path: the matcher served this flow. Same layout, no alarm. */
+.mismatch-callout.matched {
+  background: #101b16;
+  border-bottom-color: #26372f;
+  color: var(--mint);
+}
+
+.mismatch-callout.matched code {
+  color: #4f7a66;
+}
+
 .mismatch-callout span {
   align-items: center;
   display: flex;
@@ -1190,6 +1234,22 @@ button {
   flex: 1;
   grid-template-columns: 1fr 1fr;
   min-height: 0;
+}
+
+/* A matched replay has one request to show, not a two-sided comparison. */
+.diff-grid.single {
+  grid-template-columns: 1fr;
+}
+
+/* Spans both columns so the caveat sits above the panes it describes. */
+.diff-incomparable {
+  background: #221a0d;
+  border-bottom: 1px solid #4a3a17;
+  color: #f0c274;
+  font-size: 10px;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 7px 14px;
 }
 
 .diff-column {
@@ -1240,6 +1300,11 @@ button {
   tab-size: 2;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.code-pane-empty {
+  color: var(--subtle);
+  font-style: italic;
 }
 
 .token-removed {

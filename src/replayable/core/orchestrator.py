@@ -33,6 +33,7 @@ from replayable.core.policy import (
     PolicyError,
     build_policy_manifest,
     load_policy,
+    require_enforceable,
     resolve_policy,
     validate_policy_manifest,
 )
@@ -196,12 +197,39 @@ def _remove_stale_replay_artifacts(out: Path) -> None:
         REPLAY_REPORT_FILE_NAME,
         REPLAY_STATE_FILE_NAME,
         LAST_REPLAY_FILE_NAME,
+        FORK_REPORT_FILE_NAME,
+        FORK_STATE_FILE_NAME,
+        FORK_RESULT_FILE_NAME,
         REPLAY_STDOUT_FILE_NAME,
         REPLAY_STDERR_FILE_NAME,
         REPLAY_LOG_FILE_NAME,
         REPLAY_PROXY_LOG_FILE_NAME,
+        FORK_STDOUT_FILE_NAME,
+        FORK_STDERR_FILE_NAME,
+        FORK_LOG_FILE_NAME,
+        FORK_PROXY_LOG_FILE_NAME,
     ):
         (out / stale).unlink(missing_ok=True)
+
+
+def _invalidate_replay_verdicts(cassette: Path) -> None:
+    """Remove every artifact that could be mistaken for this run's verdict.
+
+    Covers both consumers. ``scripts/check_replay.py`` reads last-replay.json
+    and falls back to fork-result.json, and the dashboard labels a run HYBRID
+    purely from the presence of fork-result.json — so a normal replay that left
+    one behind would mislabel itself.
+    """
+
+    for stale in (
+        LAST_REPLAY_FILE_NAME,
+        FORK_RESULT_FILE_NAME,
+        REPLAY_REPORT_FILE_NAME,
+        REPLAY_STATE_FILE_NAME,
+        FORK_REPORT_FILE_NAME,
+        FORK_STATE_FILE_NAME,
+    ):
+        (cassette / stale).unlink(missing_ok=True)
 
 
 def _validate_network_events(
@@ -263,6 +291,10 @@ def record_run(
         raise HarnessError(f"secret overrides are invalid: {exc}") from exc
     try:
         policy = load_policy(project_rules_path)
+        # Fail before the container runs, not after: pinning a mode the replay
+        # engine does not honour would make the manifest describe behaviour the
+        # cassette never gets.
+        require_enforceable(policy)
     except PolicyError as exc:
         raise HarnessError(f"policy configuration is invalid: {exc}") from exc
     classified_secret_names = secret_names(
@@ -422,6 +454,12 @@ def replay_run(
         raise HarnessError(
             f"cassette directory not found at {cassette}; check --cassette"
         )
+    # Drop every previous verdict before anything can fail. `check_replay.py`
+    # reads last-replay.json first and then falls back to fork-result.json, so
+    # clearing only one still lets a failed fork report an older run as green.
+    # The reports and states are part of the same result: retaining one would
+    # also make the dashboard describe a previous attempt as the latest one.
+    _invalidate_replay_verdicts(cassette)
     listen_host = context.proxy_listen_host()
     port = context.resolve_port(port, listen_host)
     try:
@@ -429,6 +467,11 @@ def replay_run(
         manifest = reader.load_manifest()
         loaded = reader.load_flows()
         pinned_policy = validate_policy_manifest(manifest)
+        if pinned_policy is not None:
+            # A cassette recorded by an older build could pin a mode this replay
+            # engine does not honour. Serving it as `freeze` anyway would make
+            # the run silently disagree with its own manifest.
+            require_enforceable(pinned_policy[0])
         declared_flow_count = manifest.get("flow_count")
         if (
             isinstance(declared_flow_count, bool)
@@ -506,10 +549,10 @@ def replay_run(
         image_id=image_id,
         allow_image_mismatch=allow_image_mismatch,
     )
+    # Already cleared by `_invalidate_replay_verdicts` above; nothing between
+    # there and here writes them.
     report_path = cassette / REPLAY_REPORT_FILE_NAME
     state_path = cassette / REPLAY_STATE_FILE_NAME
-    report_path.unlink(missing_ok=True)
-    state_path.unlink(missing_ok=True)
     run_id = uuid.uuid4().hex[:12]
     environment_names = manifest.get("env_names", [])
     if not isinstance(environment_names, list) or not all(
@@ -556,10 +599,6 @@ def replay_run(
         )
     if env_file is not None:
         raise HarnessError("--env-file is only valid with --fork-at")
-    # A fork result describes the latest completed hybrid run. Once a normal
-    # replay starts, leaving it behind would make the dashboard mislabel the
-    # newer run as HYBRID.
-    (cassette / FORK_RESULT_FILE_NAME).unlink(missing_ok=True)
     replay_user_environment = dict(nonsecret_environment)
     # Use the same token record wrote into bodies/transcripts so body-auth APIs
     # and echoed secrets stay matchable without real credentials.

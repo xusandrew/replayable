@@ -95,6 +95,16 @@ export function DownstreamCheck({
             Threshold {Math.round(similarity.threshold * 100)}% · deterministic,
             local, and judge-free
           </p>
+          {/* The similarity pill is advisory. `replayable replay --fork-at`
+              exits on the byte-exact `downstream.matches` gate, so say which
+              verdict the run actually carries instead of letting a green
+              pill imply a green exit code. */}
+          <p className={`gate-note ${result.downstream.matches ? "pass" : "fail"}`}>
+            Run verdict: exit {result.exit_code} ·{" "}
+            {result.downstream.matches
+              ? "byte-identical to the baseline"
+              : "not byte-identical to the baseline (similarity is advisory)"}
+          </p>
         </div>
       </div>
       <div className="score-components">
@@ -122,6 +132,14 @@ export function DownstreamCheck({
           }
           label="Output files"
           matches={workspace.matches}
+        />
+        {/* stdout is one of the four gates behind `downstream.matches`.
+            Omitting it let a run whose only divergence was the transcript
+            render as three green rows. */}
+        <CheckRow
+          detail={`${result.downstream.stdout.baseline_sha256.slice(0, 12)}… vs ${result.downstream.stdout.candidate_sha256.slice(0, 12)}…`}
+          label="Agent transcript"
+          matches={result.downstream.stdout.matches}
         />
         <CheckRow
           detail={`baseline ${result.downstream.exit_code.baseline} · hybrid ${result.downstream.exit_code.candidate}`}

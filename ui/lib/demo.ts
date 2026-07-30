@@ -89,22 +89,20 @@ export const demoRun: RunData = {
     },
     timing: { started: 0.91, completed: 1.13 },
   },
+  // Both canonical bodies are shaped exactly like the ones the API returns:
+  // compact, key-sorted, volatile fields replaced by the sentinel. Only
+  // `system` survives normalization and differs, which is what the diff panes
+  // and the `changed` badge should report.
   mismatch: {
     live_request: {
       method: "POST",
       host: "api.anthropic.com",
       path: "/v1/messages",
-      canonical_body: JSON.stringify(
-        {
-          model: "claude-haiku-4-5",
-          system:
-            "You are a verbose research agent. Research the user's topic and prepare a fact-based report.",
-          request_id: "§VOLATILE§",
-          max_tokens: 700,
-        },
-        null,
-        2,
-      ),
+      canonical_body:
+        '{"max_tokens":700,"model":"claude-haiku-4-5","request_id":"§VOLATILE§",' +
+        '"system":"You are a verbose research agent. Research the user\'s topic ' +
+        'and prepare a fact-based report."}',
+      match_key: "5903c87f24b6d3dc9f0a1f1c4d3b2a1908e7d6c5b4a3928170f6e5d4c3b2a190",
     },
     nearest_candidates: [{ seq: 3 }],
     diff:
@@ -112,9 +110,12 @@ export const demoRun: RunData = {
   },
   explain: {
     flow: 3,
-    match_key: "5903c87f24b6d3dc",
+    match_key: "5903c87f24b6d3dc9f0a1f1c4d3b2a1908e7d6c5b4a3928170f6e5d4c3b2a190",
     pre_hash: "POST\napi.anthropic.com\n/v1/messages\n\n{...}",
-    canonical_body: '{"request_id":"§VOLATILE§"}',
+    canonical_body:
+      '{"max_tokens":700,"model":"claude-haiku-4-5","request_id":"§VOLATILE§",' +
+      '"system":"You are a concise research agent. Research the user\'s topic ' +
+      'and prepare a fact-based report."}',
     diff_body: '{\n  "request_id": "§VOLATILE§"\n}',
     rules: {
       version: "sha256:1041e721",

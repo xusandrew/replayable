@@ -17,11 +17,13 @@ export type TimelineEvent = {
   kind: string;
   scope: string;
   key: string;
-  duration_seconds: number;
+  duration_seconds: number | null;
   stream_chunk_count: number;
   metrics?: {
     model?: string;
-    estimated_cost_usd?: number;
+    // Nullable for the same reason as `duration_seconds`: the API copies the
+    // event payload's `metrics` through untouched.
+    estimated_cost_usd?: number | null;
     tokens?: Record<string, number>;
   };
 };
@@ -105,7 +107,11 @@ export type ForkResult = {
   downstream: {
     matches: boolean;
     exit_code: { matches: boolean; baseline: number; candidate: number };
-    stdout: { matches: boolean };
+    stdout: {
+      matches: boolean;
+      baseline_sha256: string;
+      candidate_sha256: string;
+    };
     workspace: {
       matches: boolean;
       diff: { added: string[]; removed: string[]; changed: string[] };

@@ -106,8 +106,13 @@ export function Timeline({
                 <span className="event-detail">
                   {eventKind(event)}
                   <span>·</span>
-                  {event.duration_seconds.toFixed(2)}s
-                  {event.metrics?.estimated_cost_usd !== undefined && (
+                  {typeof event.duration_seconds === "number"
+                    ? `${event.duration_seconds.toFixed(2)}s`
+                    : "duration unavailable"}
+                  {/* `_summary_event` copies `metrics` verbatim out of the
+                      event payload, so a null here is a JSON null, not an
+                      absent key — the same crash `duration_seconds` had. */}
+                  {typeof event.metrics?.estimated_cost_usd === "number" && (
                     <>
                       <span>·</span>$
                       {event.metrics.estimated_cost_usd.toFixed(4)}
