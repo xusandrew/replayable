@@ -16,6 +16,7 @@ from typing import Any
 from replayable import __version__
 
 CASSETTE_VERSION = "1.0"
+SUPPORTED_CASSETTE_MAJOR_VERSIONS = frozenset({1, 2})
 BLOB_THRESHOLD_BYTES = 256 * 1024
 MANIFEST_FILE_NAME = "manifest.json"
 FLOW_FILE_NAME = "flows.jsonl"
@@ -72,10 +73,13 @@ def _major_version(value: str) -> int:
 def validate_cassette_version(value: str) -> None:
     """Reject incompatible major versions while permitting minor additions."""
 
-    if _major_version(value) != _major_version(CASSETTE_VERSION):
+    if _major_version(value) not in SUPPORTED_CASSETTE_MAJOR_VERSIONS:
+        supported = ", ".join(
+            str(version) for version in sorted(SUPPORTED_CASSETTE_MAJOR_VERSIONS)
+        )
         raise CassetteVersionError(
             f"cassette major version {value!r} is unsupported; "
-            f"this harness supports {CASSETTE_VERSION!r}"
+            f"this harness supports major versions {supported}"
         )
 
 

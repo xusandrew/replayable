@@ -103,12 +103,20 @@ def test_invalid_complete_jsonl_line_is_not_silently_dropped(tmp_path):
 
 def test_major_version_mismatch_is_rejected(tmp_path):
     incompatible = manifest()
-    incompatible["cassette_version"] = "2.0"
+    incompatible["cassette_version"] = "3.0"
     writer = CassetteWriter(tmp_path)
     writer.initialize(incompatible)
 
     with pytest.raises(CassetteVersionError, match="unsupported"):
         CassetteReader(tmp_path).load_manifest()
+
+
+def test_v2_manifest_is_accepted_for_event_log_compatibility(tmp_path):
+    compatible = manifest()
+    compatible["cassette_version"] = "2.0"
+    CassetteWriter(tmp_path).initialize(compatible)
+
+    assert CassetteReader(tmp_path).load_manifest()["cassette_version"] == "2.0"
 
 
 def test_invalid_version_string_is_rejected(tmp_path):
