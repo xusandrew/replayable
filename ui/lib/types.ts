@@ -21,7 +21,9 @@ export type TimelineEvent = {
   stream_chunk_count: number;
   metrics?: {
     model?: string;
-    estimated_cost_usd?: number;
+    // Nullable for the same reason as `duration_seconds`: the API copies the
+    // event payload's `metrics` through untouched.
+    estimated_cost_usd?: number | null;
     tokens?: Record<string, number>;
   };
 };

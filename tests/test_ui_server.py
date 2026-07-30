@@ -164,6 +164,34 @@ def test_fork_result_and_diff_routes_prefer_hybrid_result(tmp_path):
     }
 
 
+def test_a_malformed_pinned_ruleset_answers_instead_of_aborting(tmp_path):
+    """``/explain`` must fail as JSON, not by dropping the connection.
+
+    ``load_rules`` raises ``RulesError``, a bare ``RuntimeError``. Without an
+    explicit handler it escaped the router entirely and
+    ``BaseHTTPRequestHandler`` aborted the request, which the dashboard can
+    only observe as "no data" — indistinguishable from a cassette that has no
+    recorded request at all.
+    """
+
+    root = tmp_path / "cassettes"
+    cassette = make_cassette(root)
+    (cassette / "replayable.toml").write_text(
+        '[normalization]\nfield_names = "not-a-list"\n',
+        encoding="utf-8",
+    )
+    static = tmp_path / "static"
+    static.mkdir()
+    app = UIApp(root, static_dir=static)
+
+    # The recorded flow still loads; only its normalization is unavailable.
+    assert app.handle("GET", "/api/cassettes/demo/flows/1").status == 200
+    response = app.handle("GET", "/api/cassettes/demo/explain?flow=1")
+
+    assert response.status == 422
+    assert "field_names" in payload(response)["error"]
+
+
 def test_static_assets_are_contained_and_support_spa_fallback(tmp_path):
     root = tmp_path / "cassettes"
     static = tmp_path / "static"

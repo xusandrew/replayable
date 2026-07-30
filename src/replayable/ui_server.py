@@ -20,7 +20,7 @@ from replayable.core.orchestrator import record_run, replay_run
 from replayable.errors import HarnessError
 from replayable.exit_codes import ExitCode
 from replayable.matcher import normalize_request, raw_request_from_record
-from replayable.normalize_rules import load_rules
+from replayable.normalize_rules import RulesError, load_rules
 from replayable.verdict.fork_result import FORK_RESULT_FILE_NAME
 from replayable.verdict.observation import (
     OBSERVATION_FILE_NAME,
@@ -153,7 +153,17 @@ class UIApp:
             return self._static(parsed.path, head=method.upper() == "HEAD")
         except APIError as exc:
             return Response.json(exc.status, {"error": str(exc)})
-        except (BaselineError, CassetteError, ObservationError, HarnessError) as exc:
+        except (
+            BaselineError,
+            CassetteError,
+            ObservationError,
+            HarnessError,
+            # A cassette can pin a malformed replayable.toml. `RulesError` is a
+            # bare RuntimeError, so without this it escapes the router entirely
+            # and BaseHTTPRequestHandler aborts the connection instead of
+            # answering — which the dashboard can only read as "no data".
+            RulesError,
+        ) as exc:
             return Response.json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
         except OSError as exc:
             return Response.json(

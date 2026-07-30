@@ -213,7 +213,13 @@ def _remove_stale_replay_artifacts(out: Path) -> None:
 
 
 def _invalidate_replay_verdicts(cassette: Path) -> None:
-    """Remove every artifact that could be mistaken for this run's verdict."""
+    """Remove every artifact that could be mistaken for this run's verdict.
+
+    Covers both consumers. ``scripts/check_replay.py`` reads last-replay.json
+    and falls back to fork-result.json, and the dashboard labels a run HYBRID
+    purely from the presence of fork-result.json — so a normal replay that left
+    one behind would mislabel itself.
+    """
 
     for stale in (
         LAST_REPLAY_FILE_NAME,
@@ -543,10 +549,10 @@ def replay_run(
         image_id=image_id,
         allow_image_mismatch=allow_image_mismatch,
     )
+    # Already cleared by `_invalidate_replay_verdicts` above; nothing between
+    # there and here writes them.
     report_path = cassette / REPLAY_REPORT_FILE_NAME
     state_path = cassette / REPLAY_STATE_FILE_NAME
-    report_path.unlink(missing_ok=True)
-    state_path.unlink(missing_ok=True)
     run_id = uuid.uuid4().hex[:12]
     environment_names = manifest.get("env_names", [])
     if not isinstance(environment_names, list) or not all(
@@ -593,10 +599,6 @@ def replay_run(
         )
     if env_file is not None:
         raise HarnessError("--env-file is only valid with --fork-at")
-    # A fork result describes the latest completed hybrid run. Once a normal
-    # replay starts, leaving it behind would make the dashboard mislabel the
-    # newer run as HYBRID.
-    (cassette / FORK_RESULT_FILE_NAME).unlink(missing_ok=True)
     replay_user_environment = dict(nonsecret_environment)
     # Use the same token record wrote into bodies/transcripts so body-auth APIs
     # and echoed secrets stay matchable without real credentials.

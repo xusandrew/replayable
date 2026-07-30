@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { changedFields, diffPanes, prettyCanonicalBody } from "./normalized-body";
+import {
+  changedFields,
+  diffPanes,
+  NO_RECORDED_REQUEST,
+  prettyCanonicalBody,
+} from "./normalized-body";
 import type { Explain, FlowDetail, Mismatch } from "./types";
 
 const RECORDED_CANONICAL =
@@ -85,11 +90,26 @@ describe("diffPanes", () => {
   });
 
   it("shows an unmatched live request when no recorded candidate exists", () => {
-    const panes = diffPanes(flow, mismatch, null);
+    // Empty cassette: the flow route has nothing to return either.
+    const panes = diffPanes(null, mismatch, null);
 
     expect(panes.normalized).toBe(false);
-    expect(panes.recorded).toBe("No recorded request is available.");
+    expect(panes.recorded).toBe(NO_RECORDED_REQUEST);
     expect(panes.live).toContain("verbose");
+  });
+
+  it("never claims a recorded request is absent when only /explain failed", () => {
+    // `/explain` fails independently of `/flows/N` — a cassette pinning a
+    // malformed replayable.toml is enough. Reporting "no recorded request" for
+    // a flow we are holding would be a plain falsehood.
+    const panes = diffPanes(flow, mismatch, null);
+
+    expect(panes.recorded).not.toBe(NO_RECORDED_REQUEST);
+    expect(panes.recorded).toBe(RAW_BODY);
+    expect(panes.live).toContain("verbose");
+    // Raw against canonical is not a diff, and must not be highlighted as one.
+    expect(panes.normalized).toBe(false);
+    expect(panes.comparable).toBe(false);
   });
 
   it("survives an empty cassette selection", () => {

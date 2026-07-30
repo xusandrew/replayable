@@ -401,10 +401,17 @@ export function Dashboard() {
   const [replaceBaseline, setReplaceBaseline] = useState(false);
   const [envFile, setEnvFile] = useState("");
   const [forkAt, setForkAt] = useState(3);
+  // Two independent generations. Sharing one counter meant a timeline click
+  // (`selectFlow`) superseded an in-flight `loadRun`, so the run refresh after
+  // a replay was silently discarded and the panel kept showing the old result.
+  // `loadRun` bumps both, so a stale flow response can never land on a newer
+  // cassette's run.
   const runRequest = useRef(0);
+  const flowRequest = useRef(0);
 
   const loadRun = useCallback(async (name: string) => {
     const request = ++runRequest.current;
+    flowRequest.current += 1;
     const timeline = await optional(loadTimeline(name));
     if (!timeline) {
       // Never dress a real cassette in another run's fabricated mismatch.
@@ -486,12 +493,14 @@ export function Dashboard() {
 
   const selectFlow = useCallback(
     async (sequence: number) => {
-      const request = ++runRequest.current;
+      // Only the flow generation: selecting a flow must not cancel a run that
+      // is still loading.
+      const request = ++flowRequest.current;
       const [flow, explain] = await Promise.all([
         optional(loadFlow(selected, sequence)),
         optional(loadExplain(selected, sequence)),
       ]);
-      if (request !== runRequest.current) return;
+      if (request !== flowRequest.current) return;
       setRun((current) => ({
         ...current,
         flow: flow ?? current.flow,
@@ -706,15 +715,20 @@ export function Dashboard() {
                   <AlertTriangle size={14} />
                   {run.explain
                     ? "Match key changed"
-                    : run.mismatch
-                      ? "No recorded candidate"
-                      : "No mismatch selected"}
+                    : !run.mismatch
+                      ? "No mismatch selected"
+                      : run.flow
+                        ? // The recorded request exists; only its normalization
+                          // is missing. Do not report it as absent.
+                          "Normalization unavailable"
+                        : "No recorded candidate"}
                 </span>
                 <code>
                   {run.explain?.match_key.slice(0, 12) ?? "unavailable"}…
                 </code>
               </div>
               <TokenDiff
+                comparable={panes.comparable ?? true}
                 live={panes.live}
                 normalized={panes.normalized}
                 recorded={panes.recorded}

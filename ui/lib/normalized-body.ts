@@ -14,11 +14,18 @@ import type { Explain, FlowDetail, Mismatch } from "./types";
  * So: render both sides through the same pipeline, and say so in the labels.
  */
 
+export const NO_RECORDED_REQUEST = "No recorded request is available.";
+
 export type DiffPanes = {
   recorded: string;
   live: string;
   /** True when both sides are the matcher's normalized view of the request. */
   normalized: boolean;
+  /**
+   * False when the two panes are in different representations and a
+   * token-level diff between them would be meaningless. Defaults to true.
+   */
+  comparable?: boolean;
 };
 
 /** Re-indent canonical JSON so a human can read it; pass anything else through. */
@@ -47,13 +54,28 @@ export function diffPanes(
     };
   }
   if (liveCanonical !== undefined) {
-    // An empty cassette has no recorded candidate to explain, but the live
-    // request is still valuable evidence. Do not replace it with two empty,
-    // apparently identical panes.
+    const live = prettyCanonicalBody(liveCanonical);
+    // Two very different situations reach here, and saying the wrong one is
+    // the failure mode this module exists to avoid:
+    //
+    //  - there genuinely is no recorded candidate (empty cassette), or
+    //  - the recorded flow loaded but /explain did not, so we have the raw
+    //    request and simply cannot normalize it.
+    //
+    // Only the first may claim the request does not exist. `/explain` fails
+    // independently of `/flows/N` — a cassette pinning a malformed
+    // replayable.toml is enough — so this is a reachable state, not a
+    // theoretical one.
+    if (flow === null) {
+      return { recorded: NO_RECORDED_REQUEST, live, normalized: false };
+    }
     return {
-      recorded: "No recorded request is available.",
-      live: prettyCanonicalBody(liveCanonical),
+      recorded: flow.request.body_decoded,
+      live,
+      // The recorded side is raw and the live side is canonical, so the panes
+      // are not comparable; the caller must not present this as a diff.
       normalized: false,
+      comparable: false,
     };
   }
   // No mismatch to show: display the recorded request on both sides rather

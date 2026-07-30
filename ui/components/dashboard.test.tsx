@@ -145,7 +145,7 @@ function apiFetch(overrides: Record<string, unknown> = {}) {
     if (value === undefined) delete routes[path];
     else routes[path] = value;
   }
-  return vi.fn(async (path: string) => {
+  return vi.fn(async (path: string, _init?: RequestInit) => {
     if (!(path in routes)) {
       return { ok: false, status: 404, json: async () => ({ error: "not found" }) };
     }
@@ -247,6 +247,118 @@ describe("Dashboard", () => {
     expect(screen.getAllByText("no recorded candidate").length).toBeGreaterThan(0);
     expect(screen.getByText("0/0 served")).toBeInTheDocument();
     expect(screen.getByTestId("added-pane")).toHaveTextContent("unrecorded");
+  });
+
+  it("does not report a recorded request as absent when only /explain fails", async () => {
+    // `/explain` can fail while `/flows/N` succeeds — a cassette pinning a
+    // malformed replayable.toml is enough. The recorded body is in hand, so
+    // claiming it does not exist would be a plain falsehood.
+    vi.stubGlobal(
+      "fetch",
+      apiFetch({ "/api/cassettes/research-agent/explain?flow=3": undefined }),
+    );
+    render(<Dashboard />);
+
+    const recorded = await screen.findByTestId("removed-pane");
+    expect(recorded).toHaveTextContent("concise");
+    expect(recorded).not.toHaveTextContent("No recorded request is available");
+    expect(screen.queryByText("No recorded candidate")).not.toBeInTheDocument();
+    expect(screen.getByText("Normalization unavailable")).toBeInTheDocument();
+    // Raw against canonical is not a comparison; nothing may be highlighted as
+    // a behavioural change, and the panel has to say why.
+    expect(recorded.querySelectorAll(".token-removed")).toHaveLength(0);
+    expect(
+      screen.getByTestId("added-pane").querySelectorAll(".token-added"),
+    ).toHaveLength(0);
+    expect(screen.getByText(/shown side by side without a comparison/)).toBeInTheDocument();
+  });
+
+  it("keeps a run refresh that a flow selection overlaps", async () => {
+    // `loadRun` and `selectFlow` are separate generations. While they shared
+    // one counter, clicking a timeline row *after* the post-replay refresh had
+    // started superseded it, and the entire refresh — timeline, mismatch, fork
+    // result — was silently discarded while the notice still said the replay
+    // had run.
+    let releaseTimeline!: () => void;
+    const timelineGate = new Promise<void>((resolve) => {
+      releaseTimeline = resolve;
+    });
+    const event = (seq: number) => ({
+      seq,
+      lamport: seq,
+      t_rel: seq * 0.4,
+      channel: "network",
+      kind: "http.exchange",
+      scope: "api.anthropic.com",
+      key: "POST api.anthropic.com:443/v1/messages",
+      duration_seconds: 0.3,
+      stream_chunk_count: 0,
+    });
+    const base = apiFetch();
+    let timelineCalls = 0;
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === "/api/cassettes/research-agent/replay") {
+        return { ok: true, status: 200, json: async () => ({ exit_code: 2 }) };
+      }
+      if (path === "/api/cassettes/research-agent/timeline") {
+        timelineCalls += 1;
+        if (timelineCalls > 1) {
+          // The refresh the replay kicked off: hold it open so a flow click
+          // can land in the middle of it.
+          await timelineGate;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ events: [event(1), event(2)] }),
+          };
+        }
+      }
+      return base(path, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Dashboard />);
+
+    await screen.findByText("3 FLOWS");
+
+    fireEvent.click(screen.getByRole("button", { name: "Replay" }));
+    await waitFor(() => expect(timelineCalls).toBe(2));
+    fireEvent.click(screen.getByRole("button", { name: /Flow 1/ }));
+    releaseTimeline();
+
+    // The refreshed two-event timeline replaced the stale three-event one.
+    await waitFor(() => expect(screen.getByText("2 FLOWS")).toBeInTheDocument());
+  });
+
+  it("renders a timeline event whose cost metric is null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      apiFetch({
+        "/api/cassettes/research-agent/timeline": {
+          events: [
+            {
+              seq: 1,
+              lamport: 1,
+              t_rel: 0.1,
+              channel: "model",
+              kind: "http.exchange",
+              scope: "api.anthropic.com",
+              key: "POST api.anthropic.com:443/v1/messages",
+              duration_seconds: 0.3,
+              stream_chunk_count: 0,
+              // `_summary_event` copies `metrics` through verbatim, so a null
+              // reaches the client as a null, not an absent key.
+              metrics: { model: "claude-haiku-4-5", estimated_cost_usd: null },
+            },
+          ],
+        },
+      }),
+    );
+    render(<Dashboard />);
+
+    expect(
+      await screen.findByRole("button", { name: /Flow 1/ }),
+    ).toHaveTextContent("MODEL CALL");
+    expect(screen.getByText("1 FLOWS")).toBeInTheDocument();
   });
 
   it("does not let a slower prior cassette overwrite the current selection", async () => {

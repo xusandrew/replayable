@@ -1219,6 +1219,17 @@ button {
   min-height: 0;
 }
 
+/* Spans both columns so the caveat sits above the panes it describes. */
+.diff-incomparable {
+  background: #221a0d;
+  border-bottom: 1px solid #4a3a17;
+  color: #f0c274;
+  font-size: 10px;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 7px 14px;
+}
+
 .diff-column {
   min-width: 0;
 }
