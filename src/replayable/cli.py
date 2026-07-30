@@ -17,6 +17,7 @@ from replayable.runner import (
     record_run,
     replay_run,
 )
+from replayable.ui_server import serve
 
 app = typer.Typer(
     name="replayable",
@@ -185,6 +186,49 @@ def inspect(
             raise HarnessError("--cassette or --explain-match is required")
     except HarnessError as exc:
         typer.echo(f"replayable: {exc}", err=True)
+        raise typer.Exit(ExitCode.HARNESS_ERROR) from exc
+
+
+@app.command()
+def ui(
+    cassette_root: Annotated[
+        Path,
+        typer.Option(
+            "--cassette-root",
+            help="Directory containing cassette subdirectories.",
+        ),
+    ] = Path("cassettes"),
+    port: Annotated[
+        int,
+        typer.Option("--port", min=0, max=65535, help="Loopback HTTP port."),
+    ] = 8765,
+    static_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--static-dir",
+            help="Built dashboard assets; defaults to the packaged export.",
+        ),
+    ] = None,
+    allow_write: Annotated[
+        bool,
+        typer.Option(
+            "--allow-write",
+            help="Enable replay, fork, and new-baseline API actions.",
+        ),
+    ] = False,
+) -> None:
+    """Serve the local cassette dashboard and API on 127.0.0.1."""
+
+    assets = static_dir or Path(__file__).parent / "ui_static"
+    try:
+        serve(
+            cassette_root=cassette_root,
+            static_dir=assets,
+            port=port,
+            allow_write=allow_write,
+        )
+    except (HarnessError, OSError) as exc:
+        typer.echo(f"replayable: UI server failed: {exc}", err=True)
         raise typer.Exit(ExitCode.HARNESS_ERROR) from exc
 
 
