@@ -77,6 +77,9 @@ def test_fork_serves_prefix_then_reaches_local_upstream(tmp_path):
         assert result["segments"]["live"]["estimated_cost_usd"] == 0.0
         assert result["downstream"]["stdout"]["matches"] is False
         assert result["events"][0]["key"].endswith("/value")
+        assert result["events"][0]["lamport"] == 1
+        assert result["downstream"]["similarity"]["kind"] == "lexical_structural"
+        assert 0.0 <= result["downstream"]["similarity"]["score"] <= 1.0
     finally:
         server.shutdown()
         server.server_close()

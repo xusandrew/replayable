@@ -26,3 +26,14 @@
   replay harness events to `replay.log`, remove stale replay artifacts when
   re-recording, and ignore a cwd `replayable.toml` during replay.
 - Estimate prompt-cache token costs in the benchmark script.
+- Add cassette v2 events, explicit replay policies, provider-neutral
+  observations, and LCS-aligned structural tool-call diffs.
+- Add secure fork/hybrid replay with live-segment cost and deterministic
+  downstream comparison.
+- Add the Vite-built local dashboard, packaged in the Python wheel and served
+  with the loopback JSON API.
+- Add reviewed, staged, atomic baseline replacement through `replayable accept`
+  and the dashboard.
+- Add a composite GitHub Action with PR comments, JUnit output, replay
+  artifacts, cost-savings evidence, and baseline staleness warnings.
+- Add a secret-gated scheduled live-drift workflow.

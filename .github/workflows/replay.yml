@@ -31,6 +31,10 @@ concurrency:
   group: replay-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   replay:
     name: Golden replay
@@ -68,48 +72,29 @@ jobs:
           docker build -t replayable/agent-base:local images/agent-base
           docker build -t replayable/research-agent:local demo/research_agent
 
-      - name: Replay the golden cassette
-        id: replay
+      - name: Prepare an isolated cassette copy
         run: |
-          set -o pipefail
-          # Replay writes its artifacts into the cassette directory, so work on
-          # a copy and leave the checked-in fixture untouched.
           cp -R "tests/fixtures/cassettes/${CASSETTE}" "${RUNNER_TEMP}/cassette"
           chmod -R u+w "${RUNNER_TEMP}/cassette"
 
-          # --allow-image-mismatch: the image is rebuilt here, so its ID
-          # legitimately differs from the recorded one. The workspace and
-          # stdout hashes are still asserted exactly, which is the real claim.
-          # Strict image identity is asserted locally, where the recorded image
-          # exists — see tests/acceptance/README.md.
-          uv run replayable replay \
-            --cassette "${RUNNER_TEMP}/cassette" \
-            --allow-image-mismatch \
-            ${{ (github.event.inputs.strict == 'false') && ' ' || '--strict' }} \
-            2>&1 | tee "${RUNNER_TEMP}/replay-output.txt"
-
-      - name: Verify the replay reproduced the recording
-        if: always() && steps.replay.outcome != 'skipped'
-        run: uv run python scripts/check_replay.py "${RUNNER_TEMP}/cassette"
+      - name: Replay the golden cassette
+        id: replay
+        uses: ./actions/github
+        with:
+          cassette: ${{ runner.temp }}/cassette
+          strict: ${{ github.event.inputs.strict || 'true' }}
+          allow-image-mismatch: "true"
+          stale-after-days: "30"
+          cache-key: >-
+            ${{ env.CASSETTE }}-${{
+              hashFiles('demo/research_agent/**',
+                        'tests/fixtures/cassettes/research-agent/manifest.json') }}
+          github-token: ${{ github.token }}
+          comment: >-
+            ${{ github.event_name == 'pull_request' &&
+                github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Run the acceptance suite
         run: uv run pytest tests/acceptance -v
         env:
           REPLAYABLE_RUN_E2E: "1"
-
-      - name: Upload replay artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: replay-${{ env.CASSETTE }}-${{ github.run_id }}
-          if-no-files-found: warn
-          retention-days: 14
-          path: |
-            ${{ runner.temp }}/replay-output.txt
-            ${{ runner.temp }}/cassette/last-replay.json
-            ${{ runner.temp }}/cassette/replay-report.json
-            ${{ runner.temp }}/cassette/replay.log
-            ${{ runner.temp }}/cassette/replay-proxy.log
-            ${{ runner.temp }}/cassette/replay-state.json
-            ${{ runner.temp }}/cassette/replay-agent.stdout
-            ${{ runner.temp }}/cassette/replay-agent.stderr

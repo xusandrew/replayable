@@ -1,0 +1,155 @@
+name: Replayable deterministic replay
+description: Replay a cassette, publish a PR verdict, and emit JUnit evidence.
+
+inputs:
+  cassette:
+    description: Cassette directory to replay.
+    required: true
+  strict:
+    description: Fail when recorded flows remain unconsumed.
+    default: "true"
+  allow-image-mismatch:
+    description: Allow the recorded image tag when the exact local digest is unavailable.
+    default: "true"
+  stale-after-days:
+    description: Warn when the baseline is older than this many days.
+    default: "30"
+  fork-at:
+    description: Optional live fork boundary; leave empty for offline replay.
+    default: ""
+  env-file:
+    description: Optional environment file for a live fork.
+    default: ""
+  cache-key:
+    description: Optional agent-source hash used to cache the cassette.
+    default: ""
+  github-token:
+    description: Token used to create or update the pull-request comment.
+    default: ""
+  comment:
+    description: Create or update the pull-request verdict comment.
+    default: "true"
+
+outputs:
+  exit-code:
+    description: "Replayable exit code: 0 pass, 1 agent failure, 2 mismatch, 3 harness error."
+    value: ${{ steps.verdict.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Restore cassette for this agent revision
+      if: inputs.cache-key != ''
+      uses: actions/cache@v5
+      with:
+        path: ${{ inputs.cassette }}
+        key: replayable-${{ runner.os }}-${{ inputs.cache-key }}
+
+    - name: Replay and render verdict
+      id: verdict
+      shell: bash
+      env:
+        REPLAYABLE_ACTION_CASSETTE: ${{ inputs.cassette }}
+        REPLAYABLE_ACTION_STRICT: ${{ inputs.strict }}
+        REPLAYABLE_ACTION_ALLOW_IMAGE_MISMATCH: ${{ inputs.allow-image-mismatch }}
+        REPLAYABLE_ACTION_FORK_AT: ${{ inputs.fork-at }}
+        REPLAYABLE_ACTION_ENV_FILE: ${{ inputs.env-file }}
+        REPLAYABLE_ACTION_STALE_DAYS: ${{ inputs.stale-after-days }}
+        REPLAYABLE_ACTION_REPORT: ${{ runner.temp }}/replayable-report.md
+        REPLAYABLE_ACTION_JUNIT: ${{ runner.temp }}/replayable-junit.xml
+      run: |
+        command=(
+          uv run replayable replay
+          --cassette "$REPLAYABLE_ACTION_CASSETTE"
+        )
+        if [[ "$REPLAYABLE_ACTION_STRICT" == "true" ]]; then
+          command+=(--strict)
+        fi
+        if [[ "$REPLAYABLE_ACTION_ALLOW_IMAGE_MISMATCH" == "true" ]]; then
+          command+=(--allow-image-mismatch)
+        fi
+        if [[ -n "$REPLAYABLE_ACTION_FORK_AT" ]]; then
+          command+=(--fork-at "$REPLAYABLE_ACTION_FORK_AT")
+        fi
+        if [[ -n "$REPLAYABLE_ACTION_ENV_FILE" ]]; then
+          command+=(--env-file "$REPLAYABLE_ACTION_ENV_FILE")
+        fi
+
+        set +e
+        "${command[@]}"
+        uv run python "$GITHUB_ACTION_PATH/../../scripts/check_replay.py" \
+          "$REPLAYABLE_ACTION_CASSETTE" \
+          --markdown-out "$REPLAYABLE_ACTION_REPORT" \
+          --junit-out "$REPLAYABLE_ACTION_JUNIT" \
+          --stale-after-days "$REPLAYABLE_ACTION_STALE_DAYS"
+        verdict_code=$?
+        set -e
+        echo "exit-code=$verdict_code" >> "$GITHUB_OUTPUT"
+
+    - name: Create or update PR verdict
+      if: >-
+        github.event_name == 'pull_request' &&
+        inputs.comment == 'true' &&
+        inputs.github-token != ''
+      uses: actions/github-script@v8
+      env:
+        REPLAYABLE_REPORT_PATH: ${{ runner.temp }}/replayable-report.md
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require("fs");
+          const marker = "<!-- replayable-verdict -->";
+          const body = `${marker}\n${fs.readFileSync(process.env.REPLAYABLE_REPORT_PATH, "utf8")}`;
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner,
+            repo,
+            issue_number,
+            per_page: 100,
+          });
+          const previous = comments.find(
+            (comment) => comment.user?.type === "Bot" && comment.body?.includes(marker),
+          );
+          if (previous) {
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: previous.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
+
+    - name: Upload replay evidence
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: replayable-${{ github.run_id }}-${{ github.run_attempt }}
+        if-no-files-found: error
+        retention-days: 14
+        path: |
+          ${{ runner.temp }}/replayable-report.md
+          ${{ runner.temp }}/replayable-junit.xml
+          ${{ inputs.cassette }}/last-replay.json
+          ${{ inputs.cassette }}/replay-report.json
+          ${{ inputs.cassette }}/replay-state.json
+          ${{ inputs.cassette }}/fork-result.json
+          ${{ inputs.cassette }}/replay.log
+          ${{ inputs.cassette }}/replay-proxy.log
+          ${{ inputs.cassette }}/replay-agent.stdout
+          ${{ inputs.cassette }}/replay-agent.stderr
+          ${{ inputs.cassette }}/fork.log
+          ${{ inputs.cassette }}/fork-proxy.log
+          ${{ inputs.cassette }}/fork-agent.stdout
+          ${{ inputs.cassette }}/fork-agent.stderr
+
+    - name: Enforce replay verdict
+      if: steps.verdict.outputs.exit-code != '0'
+      shell: bash
+      env:
+        REPLAYABLE_EXIT_CODE: ${{ steps.verdict.outputs.exit-code }}
+      run: |
+        echo "Replayable failed with exit code $REPLAYABLE_EXIT_CODE" >&2
+        exit "$REPLAYABLE_EXIT_CODE"

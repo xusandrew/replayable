@@ -97,14 +97,19 @@ credentials** — the property that makes cassettes shareable and CI free.
 | Module | Responsibility |
 |---|---|
 | `cli.py` | Typer entry points |
-| `runner.py` | Run orchestration: proxy lifecycle, container invocation, verification |
-| `cassette.py` | Bundle read/write, manifest, content-addressed blobs |
+| `runner.py` | Compatibility façade for orchestration callers |
+| `core/orchestrator.py` | Record, replay, fork, verification, and artifacts |
+| `core/` | Docker, proxy, CA, container, and policy collaborators |
+| `baseline.py` | Candidate recording, review, atomic replacement, rollback |
+| `cassette/` | Bundle read/write, event log, manifest, content-addressed blobs |
 | `matcher.py` | Normalization pipeline, FIFO matching, mismatch diffs |
 | `normalize_rules.py` | Default ruleset and `replayable.toml` overrides |
 | `redact.py` | Write-time secret detection and redaction |
 | `snapshot.py` | Deterministic workspace archive and file-level diff |
 | `inspection.py` | `inspect` and `--explain-match` rendering |
-| `addons/` | The two mitmproxy addons (record, replay) |
+| `verdict/` | Observations, structural diffs, usage, and hybrid comparison |
+| `ui_server.py` | Loopback dashboard API and static Vite asset server |
+| `addons/` | The mitmproxy record and replay processes |
 
 ## Exit codes
 

@@ -27,6 +27,7 @@ build_ca = _make_ca["build_ca"]
 write_confdir = _make_ca["write_confdir"]
 write_ca_file_atomic = _make_ca["_write_atomic"]
 build_report = _check["build_report"]
+write_junit = _check["write_junit"]
 
 
 # --------------------------------------------------------------------------
@@ -140,6 +141,93 @@ def test_matching_hashes_report_deterministic(tmp_path):
     assert exit_code == ExitCode.SUCCESS
     assert "DETERMINISTIC" in rendered
     assert "53× faster" in rendered  # noqa: RUF001 - typographic multiplication sign, display only
+
+
+def test_report_includes_cost_savings_and_staleness_warning(tmp_path):
+    cassette = write_cassette(
+        tmp_path / "c",
+        manifest={
+            "created_at": "2026-01-01T00:00:00Z",
+            "workspace_sha256": "a" * 64,
+            "stdout_sha256": "b" * 64,
+        },
+        replay={"workspace_sha256": "a" * 64, "stdout_sha256": "b" * 64},
+        observation={"model": {"estimated_cost_usd": 0.125}},
+    )
+
+    exit_code, lines = build_report(
+        cassette,
+        stale_after_days=30,
+        now=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+    rendered = "\n".join(lines)
+
+    assert exit_code == ExitCode.SUCCESS
+    assert "**Estimated API cost avoided:** $0.1250." in rendered
+    assert "Baseline is 59 days old" in rendered
+
+
+def test_hybrid_drift_report_uses_fork_result_when_no_normal_replay_exists(tmp_path):
+    cassette = write_cassette(
+        tmp_path / "c",
+        manifest={},
+        replay=None,
+        **{
+            "fork-result": {
+                "exit_code": int(ExitCode.REPLAY_MISMATCH),
+                "downstream": {
+                    "matches": False,
+                    "similarity": {"score": 0.72, "threshold": 0.85},
+                },
+                "segments": {"live": {"estimated_cost_usd": 0.041}},
+            }
+        },
+    )
+
+    exit_code, lines = build_report(cassette)
+    rendered = "\n".join(lines)
+
+    assert exit_code == ExitCode.REPLAY_MISMATCH
+    assert "Drift detected" in rendered
+    assert "72.0% / 85.0%" in rendered
+    assert "$0.0410" in rendered
+
+
+def test_hybrid_report_fails_closed_on_inconsistent_success_artifact(tmp_path):
+    cassette = write_cassette(
+        tmp_path / "c",
+        manifest={},
+        replay=None,
+        **{
+            "fork-result": {
+                "exit_code": int(ExitCode.SUCCESS),
+                "downstream": {"matches": False},
+            }
+        },
+    )
+
+    exit_code, lines = build_report(cassette)
+
+    assert exit_code == ExitCode.HARNESS_ERROR
+    assert "exit code is 0 but downstream behavior does not match" in "\n".join(lines)
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "element"),
+    [
+        (ExitCode.SUCCESS, "system-out"),
+        (ExitCode.REPLAY_MISMATCH, "failure"),
+        (ExitCode.HARNESS_ERROR, "error"),
+    ],
+)
+def test_junit_preserves_replay_outcome(tmp_path, exit_code, element):
+    path = tmp_path / "replay.xml"
+
+    write_junit(path, exit_code, ["verdict details"])
+
+    rendered = path.read_text(encoding="utf-8")
+    assert f"<{element}" in rendered
+    assert "verdict details" in rendered
 
 
 def test_diverging_workspace_hash_is_a_mismatch(tmp_path):

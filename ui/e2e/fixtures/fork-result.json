@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "mode": "hybrid",
+  "fork_at": 3,
+  "exit_code": 2,
+  "segments": {
+    "pinned": {
+      "target_flow_count": 3,
+      "served_flow_count": 3,
+      "estimated_cost_usd": 0.0
+    },
+    "live": {
+      "request_count": 4,
+      "response_count": 4,
+      "error_count": 0,
+      "flow_count": 4,
+      "model_calls": 2,
+      "models": ["claude-haiku-4-5"],
+      "tokens": {
+        "input": 1830,
+        "output": 441,
+        "cache_write": 0,
+        "cache_read": 720
+      },
+      "estimated_cost_usd": 0.11,
+      "wall_time_seconds": 15.8
+    }
+  },
+  "timing": {
+    "wall_time_seconds": 19.4
+  },
+  "downstream": {
+    "matches": false,
+    "exit_code": {
+      "matches": true,
+      "baseline": 0,
+      "candidate": 0
+    },
+    "stdout": {
+      "matches": false
+    },
+    "workspace": {
+      "matches": true,
+      "diff": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      }
+    },
+    "tool_calls": {
+      "matches": true,
+      "baseline_count": 4,
+      "candidate_count": 4,
+      "summary": {
+        "insert": 0,
+        "delete": 0,
+        "substitute": 0
+      }
+    },
+    "similarity": {
+      "kind": "lexical_structural",
+      "score": 0.92,
+      "threshold": 0.85,
+      "passes": true,
+      "components": {
+        "transcript_lexical": 0.87,
+        "tool_sequence": 1.0,
+        "output_files": 1.0
+      },
+      "weights": {
+        "transcript_lexical": 0.6,
+        "tool_sequence": 0.25,
+        "output_files": 0.15
+      }
+    }
+  },
+  "events": [
+    {
+      "seq": 1,
+      "lamport": 1,
+      "t_rel": 3.4,
+      "channel": "network",
+      "kind": "http.exchange",
+      "scope": "network",
+      "key": "GET api.open-meteo.com:443/v1/forecast",
+      "duration_seconds": 0.55,
+      "stream_chunk_count": 0
+    },
+    {
+      "seq": 2,
+      "lamport": 2,
+      "t_rel": 4.1,
+      "channel": "network",
+      "kind": "http.exchange",
+      "scope": "network",
+      "key": "POST api.anthropic.com:443/v1/messages",
+      "duration_seconds": 1.43,
+      "stream_chunk_count": 17,
+      "metrics": {
+        "model": "claude-haiku-4-5",
+        "estimated_cost_usd": 0.041
+      }
+    },
+    {
+      "seq": 3,
+      "lamport": 3,
+      "t_rel": 5.8,
+      "channel": "network",
+      "kind": "http.exchange",
+      "scope": "network",
+      "key": "GET hn.algolia.com:443/api/v1/search",
+      "duration_seconds": 0.32,
+      "stream_chunk_count": 0
+    },
+    {
+      "seq": 4,
+      "lamport": 4,
+      "t_rel": 6.3,
+      "channel": "network",
+      "kind": "http.exchange",
+      "scope": "network",
+      "key": "POST api.anthropic.com:443/v1/messages",
+      "duration_seconds": 8.01,
+      "stream_chunk_count": 40,
+      "metrics": {
+        "model": "claude-haiku-4-5",
+        "estimated_cost_usd": 0.069
+      }
+    }
+  ]
+}

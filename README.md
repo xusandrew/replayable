@@ -5,7 +5,7 @@ Docker. It records traffic through a host-side mitmproxy, stores a redacted and
 versioned cassette, and later serves recorded responses without contacting the
 original servers.
 
-The runtime and evaluation tooling for Milestones 0–6 are implemented:
+The functional demo includes:
 
 - transparent HTTP and HTTPS recording for unmodified containers;
 - structurally offline replay from the mitmproxy request hook;
@@ -21,11 +21,14 @@ The runtime and evaluation tooling for Milestones 0–6 are implemented:
 - deterministic workspace archives, hashes, and file-level diffs;
 - dummy replay credentials, structured run logs, and transcript comparison;
 - a real Anthropic research agent using Hacker News and Open-Meteo tools;
+- fork/hybrid replay with deterministic downstream comparison;
+- a local dashboard packaged in the Python wheel;
+- safe, reviewed baseline replacement;
+- a pull-request verdict action and scheduled live-drift workflow;
 - 100-run determinism and recorded-cost benchmark scripts.
 
-Milestone 5/6 acceptance evidence is still pending because it must be generated
-from a real recording owned by your Anthropic account. See
-[Generate the evaluation results](#generate-the-evaluation-results).
+Documentation is indexed in [`docs/README.md`](docs/README.md). For the app
+itself, go directly to the [dashboard usage guide](docs/dashboard/README.md).
 
 ## Mental model
 
@@ -80,6 +83,12 @@ Confirm the CLI and Docker daemon are available:
 ```sh
 uv run replayable --help
 docker info
+```
+
+Run the preflight before recording or replaying:
+
+```sh
+uv run replayable doctor
 ```
 
 
@@ -904,13 +913,21 @@ uv run replayable ui --cassette-root ./cassettes --allow-write
 ```
 
 Write actions reject non-JSON requests, cross-origin callers, non-loopback Host
-headers, path traversal, concurrent mutations, and in-place baseline
-replacement. A fresh baseline is recorded in hidden staging and published only
-after a successful run.
+headers, path traversal, concurrent mutations, and replacement of any cassette
+other than the selected baseline. Every baseline is recorded and validated in
+hidden staging before a new sibling is published or the selected baseline is
+atomically replaced.
 
 The dashboard source lives in `ui/` and is a Vite-built React application. End
 users do not need Node: the production build copies its assets into the Python
-package. Contributors can verify the complete UI with:
+package. A completed fork is shown as pinned and live timeline segments, with
+live model-call duration, cost, and stream-chunk evidence. Its downstream score
+is deterministic and local: 60% multiset lexical overlap over the captured
+stdout transcript, 25% LCS-aligned tool-call similarity, and 15% exact output
+path/content/metadata overlap. The default pass threshold is 85%; this is not
+an LLM or semantic judge, and the component scores remain visible for review.
+
+Contributors can verify the complete UI with:
 
 ```sh
 cd ui
@@ -925,13 +942,33 @@ For live-data development, run the Python API on port 8765 and `pnpm dev` in
 `ui/`; Vite proxies `/api` to that loopback server. Set
 `REPLAYABLE_API_ORIGIN` only when using a different local API port.
 
+See [`docs/dashboard/README.md`](docs/dashboard/README.md) for the complete
+read-only, write-enabled, fork, baseline, and UI-development walkthrough.
+
+### Accept a replacement baseline
+
+`accept` records a complete candidate using the baseline's image and command,
+prints bounded transcript/tool/workspace differences, and asks before changing
+the cassette:
+
+```sh
+uv run replayable accept \
+  --cassette ./cassettes/research-agent \
+  --env-file ./demo/research_agent/.env
+```
+
+Recording or validation failure leaves the old directory untouched. Publication
+uses a same-filesystem atomic rename with rollback.
+
 Run any command with `--help` for the generated Typer documentation:
 
 ```sh
 uv run replayable record --help
 uv run replayable replay --help
+uv run replayable accept --help
 uv run replayable inspect --help
 uv run replayable ui --help
+uv run replayable doctor --help
 ```
 
 
@@ -945,12 +982,14 @@ uv run replayable ui --help
 ```text
 .
 ├── src/replayable/                 Python package
+├── ui/                             Vite + React dashboard source
+├── actions/github/                 Composite PR-verdict action
 ├── images/agent-base/              Demo/test workload image
-├── demo/research_agent/             Anthropic + two-tool agent image
-├── scripts/                         Determinism and cost benchmarks
-├── docs/limitations.md              Reproducible MVP limitations
+├── demo/research_agent/            Anthropic + two-tool agent image
+├── scripts/                        CI, determinism, and cost utilities
+├── docs/README.md                  Documentation index
 ├── tests/                          Unit and integration tests
-├── .github/workflows/ci.yml        Lint, coverage, and Docker E2E CI
+├── .github/workflows/              CI, replay, and live drift jobs
 ├── CHANGELOG.md
 ├── replayable-mvp-implementation-spec.md
 ├── pyproject.toml                  Package and tool configuration
@@ -962,92 +1001,21 @@ uv run replayable ui --help
 
 ### Runtime modules
 
-`src/replayable/cli.py`
-
-- Defines the Typer application.
-- Owns the `record`, `replay`, and `inspect` command signatures.
-- Converts runner failures into stable exit codes and user-facing messages.
-- This is the entry point behind the `replayable` console command.
-
-`src/replayable/runner.py`
-
-- Orchestrates mitmdump and Docker subprocesses.
-- Binds the proxy to the narrowest reachable interface and polls readiness,
-guaranteeing SIGTERM teardown.
-- Builds the Docker proxy, CA, workspace, and env-file contract.
-- Creates and finalizes manifests.
-- Loads and validates normalization rules.
-- Reads replay state and reports, implements strict mode, and prints mismatch
-summaries.
-
-`src/replayable/inspection.py`
-
-- Implements cassette inspection and match explanations behind the `inspect`
-CLI command.
-
-`src/replayable/cassette.py`
-
-- Defines cassette version 1.0 and bundle paths.
-- Reads and atomically writes `manifest.json`.
-- Appends and recovers `flows.jsonl`.
-- Stores inline bodies or content-addressed blobs.
-- Verifies blob hashes and rejects incompatible major versions.
-- Computes secret-safe environment fingerprints.
-
-`src/replayable/redact.py`
-
-- Classifies secret environment variables by name convention and by
-URL-embedded credentials in values.
-- Parses Docker-style env files.
-- Redacts sensitive headers while preserving order and duplicates.
-- Replaces literal secret body values before storage.
-
-`src/replayable/normalize_rules.py`
-
-- Contains the default volatile field names and value patterns as data.
-- Loads and validates `replayable.toml`.
-- Merges defaults, additions, and preserve rules.
-- Computes the deterministic effective ruleset hash.
-
-`src/replayable/matcher.py`
-
-- Defines raw and normalized request representations.
-- Canonicalizes hosts, queries, and JSON bodies.
-- Builds SHA-256 match keys.
-- Builds per-key FIFO queues from cassette flows.
-- Tracks consumed and unconsumed sequences.
-- Ranks diagnostic candidates and creates unified body diffs.
-
-`src/replayable/addons/record_addon.py`
-
-- Runs inside the host mitmdump process during record.
-- Captures request and response data in the response hook.
-- Enables streamed response capture for SSE in `responseheaders`.
-- Applies redaction, body representation, hashing, sequencing, and timing.
-- Appends each completed flow immediately.
-
-`src/replayable/addons/replay_addon.py`
-
-- Runs inside the host mitmdump process during replay.
-- Loads the cassette and matcher.
-- Converts live mitmproxy requests into matcher inputs.
-- Synthesizes recorded responses in the request hook.
-- Streams recorded SSE chunks.
-- Writes structured mismatch reports and unconsumed-flow state.
-
-`src/replayable/exit_codes.py`
-
-- Defines the stable `ExitCode` enum shared by the CLI and runner.
-
-`src/replayable/snapshot.py`
-
-- Produces byte-stable gzip/tar workspace archives.
-- Hashes regular files and symlink targets.
-- Produces added/removed/changed path diagnostics.
-
-`src/replayable/__init__.py`
-
-- Exposes the current harness version used in cassette manifests.
+| Path | Responsibility |
+|---|---|
+| `cli.py` | Typer entry points and stable exit-code translation |
+| `runner.py` | Compatibility façade for orchestration callers |
+| `core/orchestrator.py` | Record, offline replay, and fork run lifecycles |
+| `core/{docker,proxy,ca,container}.py` | Runtime boundary collaborators |
+| `baseline.py` | Reviewed candidate recording and atomic baseline publication |
+| `cassette/` | Versioned bundles, blobs, and the event log |
+| `core/policy.py` | Deterministic channel/scope policy resolution |
+| `matcher.py` | Request normalization, FIFO matching, and mismatch diagnostics |
+| `verdict/` | Observations, structural diffs, usage, similarity, and fork results |
+| `ui_server.py` | Loopback JSON API and packaged-dashboard server |
+| `addons/` | Isolated mitmproxy record and replay processes |
+| `snapshot.py` | Deterministic workspace archive and file-level comparison |
+| `redact.py` | Secret classification, env parsing, and write-time redaction |
 
 
 
@@ -1116,14 +1084,18 @@ M2/M3 addon behavior.
 
 ```text
 cli.py
-  └── runner.py
-        ├── cassette.py
-        ├── redact.py
-        ├── normalize_rules.py
-        ├── matcher.py
-        └── mitmdump subprocess
-              ├── addons/record_addon.py
-              └── addons/replay_addon.py
+  ├── runner.py compatibility façade
+  │     └── core/orchestrator.py
+  │           ├── core/{docker,proxy,ca,container}.py
+  │           ├── cassette/ + core/policy.py
+  │           ├── verdict/ + snapshot.py
+  │           └── mitmdump subprocess
+  │                 └── addons/{record,replay}_addon.py
+  ├── baseline.py ──► core/orchestrator.record_run
+  └── ui_server.py ──► runner.py + baseline.py
+
+browser ──► ui_server.py /api
+  └── packaged Vite assets in src/replayable/ui_static/
 ```
 
 The addons run in a separate mitmdump process, so the runner communicates with

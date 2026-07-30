@@ -11,9 +11,11 @@ is available, and exits with the harness's own exit-code contract.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
-import sys
+import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 from pathlib import Path
 
 from replayable.exit_codes import ExitCode
@@ -47,7 +49,62 @@ def _replayed_digest(value: object) -> str:
     raise ValueError("replayed digest must be a non-empty string")
 
 
-def build_report(cassette: Path) -> tuple[int, list[str]]:
+def _build_fork_report(cassette: Path, result: dict) -> tuple[int, list[str]]:
+    raw_exit = result.get("exit_code")
+    downstream = result.get("downstream")
+    if (
+        isinstance(raw_exit, bool)
+        or not isinstance(raw_exit, int)
+        or raw_exit not in set(ExitCode)
+        or not isinstance(downstream, dict)
+        or not isinstance(downstream.get("matches"), bool)
+    ):
+        return ExitCode.HARNESS_ERROR, [
+            f"Invalid fork result in {cassette / 'fork-result.json'}."
+        ]
+    lines = [
+        "| Check | Result |",
+        "| --- | --- |",
+        f"| downstream behavior | {'✅ match' if downstream['matches'] else '❌ changed'} |",
+    ]
+    similarity = downstream.get("similarity")
+    if isinstance(similarity, dict):
+        score = similarity.get("score")
+        threshold = similarity.get("threshold")
+        if all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in (score, threshold)
+        ):
+            lines.append(f"| similarity | {float(score):.1%} / {float(threshold):.1%} threshold |")
+    segments = result.get("segments")
+    live = segments.get("live") if isinstance(segments, dict) else None
+    if isinstance(live, dict):
+        cost = live.get("estimated_cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            lines.append(f"| live API cost | ${float(cost):.4f} |")
+    exit_code = ExitCode(raw_exit)
+    if exit_code == ExitCode.SUCCESS and not downstream["matches"]:
+        return ExitCode.HARNESS_ERROR, [
+            f"Inconsistent fork result in {cassette / 'fork-result.json'}: "
+            "exit code is 0 but downstream behavior does not match."
+        ]
+    lines += [
+        "",
+        (
+            "**No drift detected.** Live execution still matches the baseline."
+            if exit_code == ExitCode.SUCCESS and downstream["matches"]
+            else "**Drift detected.** Inspect the hybrid result artifact before accepting."
+        ),
+    ]
+    return exit_code, lines
+
+
+def build_report(
+    cassette: Path,
+    *,
+    stale_after_days: int | None = None,
+    now: datetime | None = None,
+) -> tuple[int, list[str]]:
     """Return ``(exit_code, lines)`` describing the replay outcome."""
 
     manifest = _load(cassette / "manifest.json")
@@ -56,6 +113,9 @@ def build_report(cassette: Path) -> tuple[int, list[str]]:
     if manifest is None:
         return ExitCode.HARNESS_ERROR, [f"No manifest found in {cassette}."]
     if replay is None:
+        fork_result = _load(cassette / "fork-result.json")
+        if fork_result is not None:
+            return _build_fork_report(cassette, fork_result)
         return ExitCode.HARNESS_ERROR, [
             f"No last-replay.json in {cassette}; the replay did not complete.",
         ]
@@ -111,7 +171,38 @@ def build_report(cassette: Path) -> tuple[int, list[str]]:
             f"| wall time | {recorded_seconds:.2f}s | {replayed_seconds:.2f}s | "
             f"{speedup:.0f}× faster |"  # noqa: RUF001 - typographic multiplication sign, display only
         )
-    lines.append("| cost | real API spend | $0.00 | offline |")
+    observation = _load(cassette / "observation.json")
+    recorded_cost: float | None = None
+    if observation is not None:
+        model = observation.get("model")
+        value = model.get("estimated_cost_usd") if isinstance(model, dict) else None
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            recorded_cost = float(value)
+    recorded_cost_label = (
+        f"${recorded_cost:.4f}" if recorded_cost is not None else "real API spend"
+    )
+    lines.append(f"| cost | {recorded_cost_label} | $0.00 | offline |")
+    if recorded_cost is not None:
+        lines.append(f"\n**Estimated API cost avoided:** ${recorded_cost:.4f}.")
+
+    if stale_after_days is not None:
+        created_at = manifest.get("created_at")
+        if isinstance(created_at, str):
+            try:
+                created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            except ValueError:
+                created = None
+            if created is not None:
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=UTC)
+                reference = now or datetime.now(UTC)
+                age_days = (reference - created).total_seconds() / 86400
+                if age_days > stale_after_days:
+                    lines += [
+                        "",
+                        f"> ⚠️ Baseline is {age_days:.0f} days old "
+                        f"(warning threshold: {stale_after_days} days).",
+                    ]
 
     state_path = cassette / "replay-state.json"
     state = _load(state_path)
@@ -226,22 +317,57 @@ def build_report(cassette: Path) -> tuple[int, list[str]]:
     return exit_code, lines
 
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        print("usage: check_replay.py <cassette-directory>", file=sys.stderr)
-        raise SystemExit(ExitCode.HARNESS_ERROR)
+def write_junit(path: Path, exit_code: int, lines: list[str]) -> None:
+    """Write one portable JUnit testcase for CI artifact consumers."""
 
-    cassette = Path(sys.argv[1])
-    exit_code, lines = build_report(cassette)
+    suite = ET.Element(
+        "testsuite",
+        name="replayable",
+        tests="1",
+        failures="1" if exit_code in {ExitCode.AGENT_FAILED, ExitCode.REPLAY_MISMATCH} else "0",
+        errors="1" if exit_code == ExitCode.HARNESS_ERROR else "0",
+    )
+    case = ET.SubElement(suite, "testcase", classname="replayable", name="deterministic replay")
+    rendered = "\n".join(lines)
+    if exit_code in {ExitCode.AGENT_FAILED, ExitCode.REPLAY_MISMATCH}:
+        ET.SubElement(case, "failure", message=f"replay exited {int(exit_code)}").text = rendered
+    elif exit_code == ExitCode.HARNESS_ERROR:
+        ET.SubElement(case, "error", message="replay harness error").text = rendered
+    else:
+        ET.SubElement(case, "system-out").text = rendered
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("cassette", type=Path)
+    parser.add_argument("--markdown-out", type=Path)
+    parser.add_argument("--junit-out", type=Path)
+    parser.add_argument("--stale-after-days", type=int, default=30)
+    arguments = parser.parse_args()
+    if arguments.stale_after_days < 0:
+        parser.error("--stale-after-days must be non-negative")
+
+    exit_code, lines = build_report(
+        arguments.cassette,
+        stale_after_days=arguments.stale_after_days,
+    )
 
     heading = "## Replay verdict"
+    markdown = f"{heading}\n\n" + "\n".join(lines) + "\n"
     print(heading)
     print("\n".join(lines))
+    if arguments.markdown_out is not None:
+        arguments.markdown_out.parent.mkdir(parents=True, exist_ok=True)
+        arguments.markdown_out.write_text(markdown, encoding="utf-8")
+    if arguments.junit_out is not None:
+        write_junit(arguments.junit_out, exit_code, lines)
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as summary:
-            summary.write(f"{heading}\n\n" + "\n".join(lines) + "\n")
+            summary.write(markdown)
 
     raise SystemExit(exit_code)
 

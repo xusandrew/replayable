@@ -7,7 +7,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "./dashboard";
-import { eventState } from "./timeline";
+import { demoRun } from "@/lib/demo";
+import { eventState, hybridTimeline } from "./timeline";
 import { TokenDiff } from "./token-diff";
 
 afterEach(() => {
@@ -39,6 +40,12 @@ describe("timeline state", () => {
     expect(eventState(3, 3)).toBe("mismatch");
     expect(eventState(4, 3)).toBe("not-reached");
     expect(eventState(4, null)).toBe("served");
+  });
+
+  it("never presents an uncaptured baseline suffix as live", () => {
+    const events = hybridTimeline(demoRun.timeline, 3, []);
+
+    expect(events.map((event) => event.seq)).toEqual([1, 2, 3]);
   });
 });
 
@@ -84,7 +91,7 @@ describe("Dashboard", () => {
     expect(await screen.findByText("Replay exited 2.")).toBeInTheDocument();
   });
 
-  it("opens the full diff and safe fresh-baseline dialogs", () => {
+  it("distinguishes atomic replacement from a fresh sibling baseline", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     render(<Dashboard />);
 
@@ -98,11 +105,12 @@ describe("Dashboard", () => {
       screen.getByRole("button", { name: "Re-record baseline" }),
     );
     const dialog = screen.getByRole("dialog", {
-      name: "Record fresh baseline",
+      name: "Re-record baseline",
     });
-    expect(dialog).toHaveTextContent("never overwritten");
-    expect(screen.getByLabelText("Destination name")).toHaveValue(
-      "research-agent-fresh",
-    );
+    expect(dialog).toHaveTextContent("atomically replaces");
+    expect(screen.queryByLabelText("Destination name")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Replace baseline" }),
+    ).toBeInTheDocument();
   });
 });

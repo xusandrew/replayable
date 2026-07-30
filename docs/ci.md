@@ -1,11 +1,12 @@
 # Running Replayable in CI
 
-Two workflows.
+Three workflows.
 
 | Workflow | Runs on | What it proves |
 |---|---|---|
 | `.github/workflows/ci.yml` | every push and PR | lint, unit tests, coverage gates, and Docker e2e against a self-recorded cassette |
-| `.github/workflows/replay.yml` | every push and PR, **plus manual dispatch** | the determinism gate: a checked-in golden cassette replays byte-identically on a clean runner |
+| `.github/workflows/replay.yml` | every push and PR, **plus manual dispatch** | the determinism gate, PR verdict comment, JUnit report, and replay artifacts |
+| `.github/workflows/drift.yml` | nightly and manual dispatch | a secret-backed fully live fork compared with the recorded baseline |
 
 ## Running it yourself
 
@@ -26,11 +27,10 @@ From the CLI:
 gh workflow run replay.yml -f cassette=research-agent -f strict=true
 ```
 
-While the workflow is being reviewed on an unmerged branch, dispatch that
-branch explicitly because GitHub otherwise resolves the workflow on `main`:
+To test changes to the workflow before merge, dispatch that branch explicitly:
 
 ```bash
-gh workflow run replay.yml --ref pr03-ci-and-doctor \
+gh workflow run replay.yml --ref your-branch \
   -f cassette=research-agent -f strict=true
 ```
 
@@ -51,9 +51,27 @@ The job writes a verdict to the run summary:
 | wall time | 32.04s | 0.60s | 53× faster |
 | cost | real API spend | $0.00 | offline |
 
-Every run uploads an artifact containing `last-replay.json`, the proxy log, the
-replayed agent's stdout/stderr, and — if the replay diverged —
-`replay-report.json` naming the first unmatched request.
+Every run uploads Markdown and JUnit verdicts, `last-replay.json`, the proxy
+log, the replayed agent's stdout/stderr, and — if the replay diverged —
+`replay-report.json` naming the first unmatched request. Pull requests receive
+one bot comment that is updated instead of duplicated.
+
+For reuse in another workflow, see
+[`actions/github/README.md`](../actions/github/README.md).
+
+## Nightly live drift
+
+The scheduled workflow runs a fork at flow zero, so every request is live, and
+compares the resulting transcript, tool calls, output files, and exit status
+with the baseline. It requires the repository `ANTHROPIC_API_KEY` secret and is
+never triggered by pull-request code.
+
+Run it manually with:
+
+```bash
+gh workflow run drift.yml
+gh run watch
+```
 
 ## The two non-obvious things
 

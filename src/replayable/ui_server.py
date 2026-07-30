@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import mimetypes
-import shutil
-import tempfile
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from replayable.baseline import BaselineError, prepare_baseline
 from replayable.cassette import CassetteError, CassetteReader
 from replayable.cassette.events import EventLogReader
 from replayable.core.orchestrator import record_run, replay_run
@@ -154,7 +153,7 @@ class UIApp:
             return self._static(parsed.path, head=method.upper() == "HEAD")
         except APIError as exc:
             return Response.json(exc.status, {"error": str(exc)})
-        except (CassetteError, ObservationError, HarnessError) as exc:
+        except (BaselineError, CassetteError, ObservationError, HarnessError) as exc:
             return Response.json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
         except OSError as exc:
             return Response.json(
@@ -401,6 +400,7 @@ class UIApp:
         if action == "accept":
             destination = payload.get("destination")
             env_file = payload.get("env_file")
+            replace = payload.get("replace", False)
             if not isinstance(destination, str) or not destination:
                 raise APIError(
                     HTTPStatus.BAD_REQUEST,
@@ -408,44 +408,32 @@ class UIApp:
                 )
             if env_file is not None and not isinstance(env_file, str):
                 raise APIError(HTTPStatus.BAD_REQUEST, "env_file must be a path string")
+            if not isinstance(replace, bool):
+                raise APIError(HTTPStatus.BAD_REQUEST, "replace must be a boolean")
             target = self.cassette_root / destination
-            if target.exists():
+            if target.exists() and not (replace and target == cassette):
                 raise APIError(
                     HTTPStatus.CONFLICT,
-                    "destination exists; baseline replacement requires replayable accept",
+                    "destination exists; only the selected baseline can be replaced",
                 )
             # Validate the new name through the same single-segment rules.
             if not self._valid_name(destination) or target.resolve().parent != self.cassette_root:
                 raise APIError(HTTPStatus.BAD_REQUEST, "invalid destination name")
-            manifest = CassetteReader(cassette).load_manifest()
-            temporary = Path(
-                tempfile.mkdtemp(
-                    dir=self.cassette_root,
-                    prefix=f".{destination}.",
-                )
-            )
-            try:
-                code = self.record_executor(
-                    image=manifest["image"]["ref"],
-                    command=manifest["command"],
-                    env_file=Path(env_file) if env_file else None,
-                    out=temporary,
-                )
-                if code != ExitCode.SUCCESS:
-                    raise APIError(
-                        HTTPStatus.UNPROCESSABLE_ENTITY,
-                        f"new baseline recording exited {int(code)}",
-                    )
-                temporary.replace(target)
-            finally:
-                if temporary.exists():
-                    shutil.rmtree(temporary)
+            with prepare_baseline(
+                source=cassette,
+                destination=target,
+                env_file=Path(env_file) if env_file else None,
+                record_executor=self.record_executor,
+            ) as candidate:
+                candidate.publish(replace=replace)
             return Response.json(
-                HTTPStatus.CREATED,
+                HTTPStatus.OK if replace else HTTPStatus.CREATED,
                 {
                     "action": "accept",
-                    "exit_code": int(code),
+                    "exit_code": int(ExitCode.SUCCESS),
                     "cassette": destination,
+                    "replaced": replace,
+                    "preview": candidate.preview,
                 },
             )
         raise APIError(HTTPStatus.NOT_FOUND, "write action not found")
